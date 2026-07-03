@@ -92,4 +92,39 @@ points = "-5"
     name = '/lib/systemd/system/sshd.service'
 ```
 
+## Categories
+
+A check may optionally be assigned a **category** using the `category` field. Categories are used to group related checks together on the scoring report. When any check sets a category, the report renders a separate section per category, each showing its own "X out of Y found, N points out of M" breakdown (and any penalties assessed within that category). Checks without a category are listed in an uncategorized section after the named ones.
+
+If no check sets a category, the report is unchanged from the default flat layout.
+
+> **Note**: Categories affect only the local scoring report. They are not transmitted in remote scoring updates.
+
+```
+[[check]]
+category = "User Management"
+message = "Unauthorized guest account removed"
+points = 5
+
+    [[check.pass]]
+    type = 'UserExistsNot'
+    name = 'guest'
+
+[[check]]
+category = "User Management"
+message = "Primary user added to sudoers"
+points = 5
+
+    [[check.pass]]
+    type = 'UserInGroup'
+    user = 'sha'
+    group = 'sudo'
+
+[[check]]
+message = "Firewall enabled"
+    [[check.pass]]
+    type = 'FirewallUp'
+```
+
+
 

@@ -16,6 +16,9 @@ contain a lot of important information, please be sure to read them.
 > **Note**: Regex is officially supported for `CommandContainsRegex`, `DirContainsRegex`, and `FileContainsRegex`. Read
 > more about regex [here](regex.md).
 
+> **Note**: A check may optionally set a `category` to group related checks into their own section on the scoring
+> report. See [configuration](config.md#categories) for more details.
+
 **CommandContains**: pass if command output contains string. If executing the command fails (the check returns an
 error), check never passes. Use of this check is discouraged.
 
