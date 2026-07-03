@@ -55,25 +55,30 @@ func genReport(img *imageData) {
 		htmlFile.WriteString(`Aeacus Server Connection Status: <span class="gray">N/A</span><br>`)
 	}
 
-	htmlFile.WriteString(fmt.Sprintf(`<h3> %d penalties assessed, for a loss of %.0f points: </h3> <p> <span class="red">`, len(img.Penalties), math.Abs(float64(img.Detracts))))
+	if hasCategories() {
+		genReportCategory(&htmlFile)
+	} else {
+		htmlFile.WriteString(fmt.Sprintf(`<h3> %d penalties assessed, for a loss of %.0f points: </h3> <p> <span class="red">`, len(img.Penalties), math.Abs(float64(img.Detracts))))
 
-	// for each penalty:
-	for _, penalty := range img.Penalties {
-		deobfuscateData(&penalty.Message)
-		htmlFile.WriteString(fmt.Sprintf("%s - %.0f pts<br>", html.EscapeString(penalty.Message), math.Abs(float64(penalty.Points))))
-		obfuscateData(&penalty.Message)
+		// for each penalty:
+		for _, penalty := range img.Penalties {
+			deobfuscateData(&penalty.Message)
+			htmlFile.WriteString(fmt.Sprintf("%s - %.0f pts<br>", html.EscapeString(penalty.Message), math.Abs(float64(penalty.Points))))
+			obfuscateData(&penalty.Message)
+		}
+
+		htmlFile.WriteString(fmt.Sprintf(`</span> </p> <h3> %d out of %d scored security issues fixed, for a gain of %d points:</h3><p>`, len(img.Points), img.ScoredVulns, img.Contribs))
+
+		// for each point:
+		for _, point := range img.Points {
+			deobfuscateData(&point.Message)
+			htmlFile.WriteString(fmt.Sprintf("%s - %d pts<br>", html.EscapeString(point.Message), point.Points))
+			obfuscateData(&point.Message)
+		}
+
+		htmlFile.WriteString("</p>")
 	}
 
-	htmlFile.WriteString(fmt.Sprintf(`</span> </p> <h3> %d out of %d scored security issues fixed, for a gain of %d points:</h3><p>`, len(img.Points), img.ScoredVulns, img.Contribs))
-
-	// for each point:
-	for _, point := range img.Points {
-		deobfuscateData(&point.Message)
-		htmlFile.WriteString(fmt.Sprintf("%s - %d pts<br>", html.EscapeString(point.Message), point.Points))
-		obfuscateData(&point.Message)
-	}
-
-	htmlFile.WriteString("</p>")
 	// for each hint:
 	for _, hint := range img.Hints {
 		if len(hint.Messages) == 1 {
@@ -95,6 +100,146 @@ func genReport(img *imageData) {
 
 	info("Writing HTML to ScoringReport.html...")
 	writeFile(dirPath+"assets/ScoringReport.html", htmlFile.String())
+}
+
+// catSection holds the per-category breakdown for the scoring report. The
+// "found" metrics (Found, PointsEarned) count only checks that passed, while the
+// total metrics (TotalFound, PointsPossible) count every configured check in
+// the category.
+type catSection struct {
+	Name string
+
+	Found          int
+	TotalFound     int
+	PointsEarned   int
+	PointsPossible int
+
+	PenaltyCount  int
+	PenaltyPoints int
+
+	Points    []scoreItem
+	Penalties []scoreItem
+}
+
+// writeScoreItems writes a list of scored items to the report, deobfuscating
+// each message just-in-time and re-obfuscating it afterwards. When abs is true,
+// points are rendered as their absolute value (used for penalties).
+func writeScoreItems(b *strings.Builder, items []scoreItem, abs bool) {
+	for _, item := range items {
+		deobfuscateData(&item.Message)
+		if abs {
+			b.WriteString(fmt.Sprintf("%s - %.0f pts<br>", html.EscapeString(item.Message), math.Abs(float64(item.Points))))
+		} else {
+			b.WriteString(fmt.Sprintf("%s - %d pts<br>", html.EscapeString(item.Message), item.Points))
+		}
+		obfuscateData(&item.Message)
+	}
+}
+
+// hasCategories reports whether any configured check sets a category. When this
+// is false, genReport renders the legacy flat report so output is unchanged.
+func hasCategories() bool {
+	for _, check := range conf.Check {
+		if check.Category != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// buildCategorySections groups the scored items by category and computes the
+// per-category totals. Named sections are returned in first-seen order, followed
+// by the unnamed (uncategorized) section. Denominators (TotalFound,
+// PointsPossible) are computed over every configured positive-point check in
+// the category; numerators (Found, PointsEarned) reflect only passed checks.
+func buildCategorySections() ([]catSection, *catSection) {
+	// Preserve first-seen order of named categories.
+	var order []string
+	cats := map[string]*catSection{}
+
+	get := func(name string) *catSection {
+		if c, ok := cats[name]; ok {
+			return c
+		}
+		c := &catSection{Name: name}
+		cats[name] = c
+		return c
+	}
+
+	// Denominators come from the full set of configured checks. Named
+	// categories are tracked in first-seen order so the report is stable.
+	for _, check := range conf.Check {
+		c := get(check.Category)
+		if check.Points >= 0 {
+			c.TotalFound++
+			c.PointsPossible += check.Points
+		}
+		if check.Category != "" {
+			already := false
+			for _, n := range order {
+				if n == check.Category {
+					already = true
+					break
+				}
+			}
+			if !already {
+				order = append(order, check.Category)
+			}
+		}
+	}
+
+	// Numerators come from passed checks.
+	for _, point := range image.Points {
+		c := get(point.Category)
+		c.Found++
+		c.PointsEarned += point.Points
+		c.Points = append(c.Points, point)
+	}
+	for _, penalty := range image.Penalties {
+		c := get(penalty.Category)
+		c.PenaltyCount++
+		c.PenaltyPoints += penalty.Points
+		c.Penalties = append(c.Penalties, penalty)
+	}
+
+	var named []catSection
+	for _, name := range order {
+		named = append(named, *cats[name])
+	}
+	unnamed := cats[""]
+	return named, unnamed
+}
+
+// writeCategorySection writes a single category section to the report. title is
+// the heading prefix ("Category: <Name>" for named sections, empty for the
+// uncategorized section). Empty metric/penalty headers are omitted so the
+// report never prints "0 out of 0" noise.
+func writeCategorySection(b *strings.Builder, s catSection, title string) {
+	if s.TotalFound > 0 {
+		header := fmt.Sprintf(`<h3>%s%d out of %d found, %d points out of %d</h3><p>`,
+			title, s.Found, s.TotalFound, s.PointsEarned, s.PointsPossible)
+		b.WriteString(header)
+		writeScoreItems(b, s.Points, false)
+		b.WriteString("</p>")
+	}
+	if s.PenaltyCount > 0 {
+		b.WriteString(fmt.Sprintf(`<h3>%s%d penalties assessed, for a loss of %.0f points: </h3> <p> <span class="red">`,
+			title, s.PenaltyCount, math.Abs(float64(s.PenaltyPoints))))
+		writeScoreItems(b, s.Penalties, true)
+		b.WriteString(`</span> </p>`)
+	}
+}
+
+// genReportCategory renders the report body using per-category sections instead
+// of the legacy flat layout. Called only when at least one check has a category.
+func genReportCategory(b *strings.Builder) {
+	named, unnamed := buildCategorySections()
+	for _, s := range named {
+		writeCategorySection(b, s, "Category: "+html.EscapeString(s.Name)+" &mdash; ")
+	}
+	if unnamed != nil && (unnamed.TotalFound > 0 || unnamed.PenaltyCount > 0) {
+		writeCategorySection(b, *unnamed, "")
+	}
 }
 
 // genReadMe generates a competition ReadMe with some built-in defaults from
