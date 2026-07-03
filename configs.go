@@ -160,6 +160,9 @@ func printConfig() {
 	for i, check := range conf.Check {
 		green("CHCK", fmt.Sprintf("Check %d (%d points):", i+1, check.Points))
 		fmt.Println("Message:", check.Message)
+		if check.Category != "" {
+			fmt.Println("Category:", check.Category)
+		}
 		for _, c := range check.Pass {
 			fmt.Println("Pass Condition:")
 			fmt.Print(c)

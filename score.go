@@ -47,9 +47,10 @@ type connData struct {
 // scoreItem is the scoring report representation of a check, containing only
 // the message and points associated with it.
 type scoreItem struct {
-	Index   int
-	Message string
-	Points  int
+	Index    int
+	Message  string
+	Points   int
+	Category string
 }
 
 // hintItem is the scoring report representation of a hint, which can contain
@@ -248,7 +249,7 @@ func scoreCheck(check check) {
 				pass(fmt.Sprintf("Check passed: %s - %d pts", check.Message, check.Points))
 				obfuscateData(&check.Message)
 			}
-			image.Points = append(image.Points, scoreItem{checkCount, check.Message, check.Points})
+			image.Points = append(image.Points, scoreItem{checkCount, check.Message, check.Points, check.Category})
 			image.Contribs += check.Points
 		} else {
 			if verboseEnabled {
@@ -256,7 +257,7 @@ func scoreCheck(check check) {
 				fail(fmt.Sprintf("Penalty triggered: %s - %d pts", check.Message, check.Points))
 				obfuscateData(&check.Message)
 			}
-			image.Penalties = append(image.Penalties, scoreItem{checkCount, check.Message, check.Points})
+			image.Penalties = append(image.Penalties, scoreItem{checkCount, check.Message, check.Points, check.Category})
 			image.Detracts += check.Points
 		}
 		image.Score += check.Points
