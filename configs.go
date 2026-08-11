@@ -15,13 +15,17 @@ import (
 // parseConfig takes the config content as a string and attempts to parse it
 // into the conf struct based on the TOML spec.
 func parseConfig(configContent string) error {
+	return parseConfigWithCapabilities(configContent, runtime.GOOS, resolveRuntimeCapabilities)
+}
+
+func parseConfigWithCapabilities(configContent, goos string, resolve func(config) (config, error)) error {
 	if configContent == "" {
 		return fmt.Errorf("configuration is empty")
 	}
 	candidate := &config{}
 	md, err := toml.Decode(configContent, candidate)
 	if err != nil {
-		return fmt.Errorf("decode TOML for GOOS %s: %w", runtime.GOOS, err)
+		return fmt.Errorf("decode TOML for GOOS %s: %w", goos, err)
 	}
 
 	// If there's no remote, local must be enabled.
@@ -44,13 +48,13 @@ func parseConfig(configContent string) error {
 			warn("Remote encryption is disabled, but a password is still defined!")
 		}
 	}
-	resolved, err := resolveRuntimeCapabilities(*candidate)
+	resolved, err := resolve(*candidate)
 	if err != nil {
 		return err
 	}
 	candidate = &resolved
 
-	if err := validateConfigConditions(candidate, runtime.GOOS); err != nil {
+	if err := validateConfigConditions(candidate, goos); err != nil {
 		return err
 	}
 	if verboseEnabled {

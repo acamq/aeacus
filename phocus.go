@@ -4,7 +4,6 @@ package main
 
 import (
 	"math/rand"
-	"os"
 	"time"
 
 	"github.com/urfave/cli/v2"
@@ -14,11 +13,11 @@ const (
 	DEBUG_BUILD = false
 )
 
-func phocusLoop() {
+func phocusLoop(shellLauncher func()) {
 	info("Initializing engine context...")
 	phocusEnvironment()
 	if conf.Shell {
-		go shellSocket()
+		go shellLauncher()
 	}
 	for {
 		scoreImage()
@@ -35,11 +34,6 @@ func phocusEnvironment() {
 	permsCheck()
 	// Make sure phocus is not being traced or debugged.
 	checkTrace()
-	// Read in scoring data from the scoring data file.
-	if err := readScoringData(); err != nil {
-		fail(err)
-		os.Exit(1)
-	}
 	// Seed the random function for scoring at "random" intervals.
 	rand.Seed(time.Now().UnixNano())
 }
@@ -50,8 +44,7 @@ func genPhocusApp() *cli.App {
 		Name:  "phocus",
 		Usage: "score vulnerabilities",
 		Action: func(c *cli.Context) error {
-			phocusLoop()
-			return nil
+			return startPhocus(readScoringData, phocusLoop, shellSocket)
 		},
 		Before: func(c *cli.Context) error {
 			err := determineDirectory()
