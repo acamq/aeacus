@@ -20,7 +20,7 @@ func parseConfig(configContent string) error {
 	candidate := &config{}
 	md, err := toml.Decode(configContent, candidate)
 	if err != nil {
-		return fmt.Errorf("decode TOML: %w", err)
+		return fmt.Errorf("decode TOML for GOOS %s: %w", runtime.GOOS, err)
 	}
 
 	// If there's no remote, local must be enabled.
@@ -211,7 +211,7 @@ func obfuscateConfig() {
 func obfuscateCond(c *cond) error {
 	s := reflect.ValueOf(c).Elem()
 	for i := 0; i < s.NumField(); i++ {
-		if s.Type().Field(i).Name == "regex" {
+		if s.Field(i).Kind() != reflect.String {
 			continue
 		}
 		datum := s.Field(i).String()
@@ -228,7 +228,7 @@ func obfuscateCond(c *cond) error {
 func deobfuscateCond(c *cond) error {
 	s := reflect.ValueOf(c).Elem()
 	for i := 0; i < s.NumField(); i++ {
-		if s.Type().Field(i).Name == "regex" {
+		if s.Field(i).Kind() != reflect.String {
 			continue
 		}
 		datum := s.Field(i).String()

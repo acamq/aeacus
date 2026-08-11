@@ -11,6 +11,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"sort"
+	"strconv"
 )
 
 const contractSchema = "condition-availability-v1"
@@ -68,42 +69,55 @@ type availabilityContract struct {
 	Schema  string   `json:"schema"`
 	Linux   []string `json:"linux"`
 	Windows []string `json:"windows"`
+
+	linuxRequired   map[string][]string
+	windowsRequired map[string][]string
 }
 
 func discoverAvailability(root string) (availabilityContract, error) {
-	linux, err := discoverMethods(root, "linux")
+	linux, linuxRequired, err := discoverMethods(root, "linux")
 	if err != nil {
 		return availabilityContract{}, err
 	}
-	windows, err := discoverMethods(root, "windows")
+	windows, windowsRequired, err := discoverMethods(root, "windows")
 	if err != nil {
 		return availabilityContract{}, err
 	}
-	return availabilityContract{Schema: contractSchema, Linux: linux, Windows: windows}, nil
+	return availabilityContract{
+		Schema:          contractSchema,
+		Linux:           linux,
+		Windows:         windows,
+		linuxRequired:   linuxRequired,
+		windowsRequired: windowsRequired,
+	}, nil
 }
 
-func discoverMethods(root, goos string) ([]string, error) {
+func discoverMethods(root, goos string) ([]string, map[string][]string, error) {
 	ctx := build.Default
 	ctx.GOOS = goos
 	ctx.GOARCH = "amd64"
 	ctx.CgoEnabled = false
 	pkg, err := ctx.ImportDir(root, build.IgnoreVendor)
 	if err != nil {
-		return nil, fmt.Errorf("select %s files: %w", goos, err)
+		return nil, nil, fmt.Errorf("select %s files: %w", goos, err)
 	}
 
-	methods := make(map[string]struct{})
+	methods := make(map[string][]string)
 	fset := token.NewFileSet()
 	for _, name := range append(pkg.GoFiles, pkg.CgoFiles...) {
 		path := filepath.Join(root, name)
 		file, err := parser.ParseFile(fset, path, nil, 0)
 		if err != nil {
-			return nil, fmt.Errorf("parse %s: %w", path, err)
+			return nil, nil, fmt.Errorf("parse %s: %w", path, err)
 		}
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if ok && isConditionMethod(fn) {
-				methods[fn.Name.Name] = struct{}{}
+				required, err := requiredConditionFields(fn)
+				if err != nil {
+					return nil, nil, fmt.Errorf("inspect %s.%s: %w", path, fn.Name.Name, err)
+				}
+				methods[fn.Name.Name] = required
 			}
 		}
 	}
@@ -113,7 +127,7 @@ func discoverMethods(root, goos string) ([]string, error) {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	return names, nil
+	return names, methods, nil
 }
 
 func isConditionMethod(fn *ast.FuncDecl) bool {
@@ -127,6 +141,44 @@ func isConditionMethod(fn *ast.FuncDecl) bool {
 	first, firstOK := fn.Type.Results.List[0].Type.(*ast.Ident)
 	second, secondOK := fn.Type.Results.List[1].Type.(*ast.Ident)
 	return firstOK && secondOK && first.Name == "bool" && second.Name == "error"
+}
+
+func requiredConditionFields(fn *ast.FuncDecl) ([]string, error) {
+	required := make(map[string]struct{})
+	var inspectErr error
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || selector.Sel.Name != "requireArgs" {
+			return true
+		}
+		for _, argument := range call.Args {
+			literal, ok := argument.(*ast.BasicLit)
+			if !ok || literal.Kind != token.STRING {
+				inspectErr = fmt.Errorf("requireArgs arguments must be string literals")
+				return false
+			}
+			field, err := strconv.Unquote(literal.Value)
+			if err != nil {
+				inspectErr = fmt.Errorf("decode requireArgs field: %w", err)
+				return false
+			}
+			required[field] = struct{}{}
+		}
+		return false
+	})
+	if inspectErr != nil {
+		return nil, inspectErr
+	}
+	fields := make([]string, 0, len(required))
+	for field := range required {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return fields, nil
 }
 
 func renderContract(contract availabilityContract) []byte {
@@ -150,6 +202,7 @@ func renderGo(contract availabilityContract) []byte {
 	writeMethodSet(&source, "linux", legacyRegexConditionMethods)
 	writeMethodSet(&source, "windows", legacyRegexConditionMethods)
 	source.WriteString("}\n")
+	writeConditionFieldSpecs(&source, contract)
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
 		panic(err)

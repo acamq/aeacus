@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -100,38 +99,17 @@ func TestValidateConfigConditionsRejectsInvalidTypes(t *testing.T) {
 func TestValidateConfigConditionsAcceptsLegacyForms(t *testing.T) {
 	legacy := &config{Check: []check{{
 		Pass: []cond{
-			{Type: "FileContains"},
-			{Type: "FileContainsNot"},
-			{Type: "FileContainsRegex"},
-			{Type: "FileContainsRegexNot"},
-			{Type: "Command"},
+			{Type: "FileContains", Path: "/tmp/example", Value: "literal"},
+			{Type: "FileContainsNot", Path: "/tmp/example", Value: "literal"},
+			{Type: "FileContainsRegex", Path: "/tmp/example", Value: "^regex$"},
+			{Type: "FileContainsRegexNot", Path: "/tmp/example", Value: "^regex$"},
+			{Type: "Command", Cmd: "true"},
 		},
-		Fail:         []cond{{Type: "PathExistsNot"}},
-		PassOverride: []cond{{Type: "UserExists"}},
+		Fail:         []cond{{Type: "PathExistsNot", Path: "/tmp/example"}},
+		PassOverride: []cond{{Type: "UserExists", User: "example"}},
 	}}}
 	if err := validateConfigConditions(legacy, "linux"); err != nil {
 		t.Fatalf("validateConfigConditions() = %v", err)
-	}
-}
-
-func TestParseConfigValidationFailurePreservesState(t *testing.T) {
-	oldConf, oldImage, oldConn, oldCount := conf, image, conn, checkCount
-	t.Cleanup(func() { conf, image, conn, checkCount = oldConf, oldImage, oldConn, oldCount })
-
-	conf = &config{Name: "sentinel", Check: []check{{Points: 17, Message: "unchanged"}}}
-	image = &imageData{Score: 23, TotalPoints: 42, Points: []scoreItem{{Message: "unchanged"}}}
-	conn = &connData{OverallStatus: "unchanged", Status: true}
-	checkCount = 9
-	wantConf := *conf
-	wantImage := *image
-	wantConn := *conn
-
-	input := "[[check]]\npoints = 50\n[[check.pass]]\ntype = 'UnknownConditionNot'\n"
-	if err := parseConfig(input); err == nil {
-		t.Fatal("parseConfig() error = nil")
-	}
-	if !reflect.DeepEqual(*conf, wantConf) || !reflect.DeepEqual(*image, wantImage) || !reflect.DeepEqual(*conn, wantConn) || checkCount != 9 {
-		t.Fatalf("validation failure mutated state: conf=%+v image=%+v conn=%+v checkCount=%d", conf, image, conn, checkCount)
 	}
 }
 

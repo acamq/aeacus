@@ -34,15 +34,16 @@ type cond struct {
 	Hint string
 	Type string
 
-	Path  string
-	Cmd   string
-	User  string
-	Group string
-	Name  string
-	Key   string
-	Value string
-	After string
-	regex bool
+	Path          string
+	Cmd           string
+	User          string
+	Group         string
+	Name          string
+	Key           string
+	Value         string
+	After         string
+	regex         bool
+	unknownFields []string
 }
 
 // requireArgs is a convenience function that prints a warning if any required
@@ -58,7 +59,7 @@ func (c cond) requireArgs(args ...interface{}) {
 	v := reflect.ValueOf(c)
 	vType := v.Type()
 	for i := 0; i < v.NumField(); i++ {
-		if vType.Field(i).Name == "Type" || vType.Field(i).Name == "regex" {
+		if v.Field(i).Kind() != reflect.String || vType.Field(i).Name == "Type" {
 			continue
 		}
 
@@ -91,6 +92,9 @@ func (c cond) String() string {
 	typeOfS := v.Type()
 
 	for i := 0; i < v.NumField(); i++ {
+		if v.Field(i).Kind() != reflect.String {
+			continue
+		}
 		if v.Field(i).String() == "" {
 			continue
 		}

@@ -49,6 +49,9 @@ func validateConfigConditions(candidate *config, goos string) error {
 				if err == nil {
 					err = validateConditionCapability(goos, parsed)
 				}
+				if err == nil {
+					err = validateConditionFields(goos, parsed.Base, condition)
+				}
 				if err != nil {
 					return &conditionValidationError{
 						Type:      condition.Type,

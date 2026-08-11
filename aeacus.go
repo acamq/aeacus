@@ -154,8 +154,7 @@ func main() {
 				Action: func(c *cli.Context) error {
 					permsCheck()
 					confirm("Are you sure you want to begin the image release process?")
-					releaseImage()
-					return nil
+					return releaseImage()
 				},
 			},
 		},
@@ -171,10 +170,9 @@ func main() {
 // releaseImage goes through the process of checking the config,
 // writing the ReadMe/Desktop Files, installing the system service,
 // and cleaning the image for release.
-func releaseImage() {
+func releaseImage() error {
 	if err := readConfig(); err != nil {
-		fail(err.Error())
-		return
+		return err
 	}
 	writeConfig()
 	genReadMe()
@@ -184,4 +182,5 @@ func releaseImage() {
 	installService()
 	confirm("Everything is done except cleanup. Are you sure you want to continue, and remove your scoring configuration and other aeacus files?")
 	cleanUp()
+	return nil
 }

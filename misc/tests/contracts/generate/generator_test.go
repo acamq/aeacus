@@ -86,3 +86,46 @@ func TestFreeBSDAdditionsDoNotLeakToLegacyPlatforms(t *testing.T) {
 		}
 	}
 }
+
+func TestDiscoveredRequiredFieldsMatchConditionMethods(t *testing.T) {
+	root, err := filepath.Abs("../../../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	availability, err := discoverAvailability(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		fields []string
+	}{
+		{name: "linux PathExists", fields: availability.linuxRequired["PathExists"]},
+		{name: "linux FileContains", fields: availability.linuxRequired["FileContains"]},
+		{name: "windows PasswordChanged", fields: availability.windowsRequired["PasswordChanged"]},
+		{name: "windows BitlockerEnabled", fields: availability.windowsRequired["BitlockerEnabled"]},
+	}
+	wants := [][]string{{"Path"}, {"Path", "Value"}, {"After", "User"}, {}}
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !slices.Equal(tt.fields, wants[index]) {
+				t.Fatalf("required fields = %v, want %v", tt.fields, wants[index])
+			}
+		})
+	}
+}
+
+func TestFreeBSDFieldSpecsCoverAvailability(t *testing.T) {
+	if len(freeBSDFieldSpecs) != len(freeBSDConditionMethods) {
+		t.Fatalf("FreeBSD field specs = %d, methods = %d", len(freeBSDFieldSpecs), len(freeBSDConditionMethods))
+	}
+	for _, method := range freeBSDConditionMethods {
+		if _, exists := freeBSDFieldSpecs[method]; !exists {
+			t.Errorf("FreeBSD method %q has no field specification", method)
+		}
+	}
+	firewall := freeBSDFieldSpecs["FirewallUp"]
+	if !slices.Equal(firewall.optional, []string{"Name"}) {
+		t.Fatalf("FirewallUp optional fields = %v, want [Name]", firewall.optional)
+	}
+}
