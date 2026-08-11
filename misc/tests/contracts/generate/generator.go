@@ -131,6 +131,10 @@ func discoverMethods(root, goos string) ([]string, map[string][]string, error) {
 }
 
 func isConditionMethod(fn *ast.FuncDecl) bool {
+	// Exported matching methods define the public condition surface because runtime reflection exposes only exported methods.
+	if !ast.IsExported(fn.Name.Name) {
+		return false
+	}
 	if fn.Recv == nil || len(fn.Recv.List) != 1 || fn.Type.Params.NumFields() != 0 || fn.Type.Results == nil || len(fn.Type.Results.List) != 2 {
 		return false
 	}
