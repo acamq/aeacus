@@ -115,12 +115,29 @@ func TestFileContains(t *testing.T) {
 	}
 }
 
+// TestDirContainsRegexError proves DirContains propagates per-file regexp
+// errors rather than swallowing them. With cond.regex=true and a malformed
+// pattern, FileContains returns (false, *regexp.Error); DirContains must
+// surface that error so runCheck's negation branch (DirContainsRegexNot)
+// fails closed instead of silently passing.
+func TestDirContainsRegexError(t *testing.T) {
+	c := cond{
+		Path:  "misc/tests/dir",
+		Value: "[",
+		regex: true,
+	}
+	out, err := c.DirContains()
+	if out != false || err == nil {
+		t.Errorf("DirContains() with malformed regex = (%v, %v); want (false, non-nil error)", out, err)
+	}
+}
+
 // TestRunCheckContains exercises the runCheck dispatcher across every
 // Contains-family condition type so that the literal/regex and negation
-// suffix-parsing logic stays covered end to end. Plain (unobfuscated) cond
-// values are intentional: deobfuscateCond fails fast on the non-hex Type
-// field and runCheck proceeds with the original literals, which is the same
-// escape hatch the existing direct-method tests rely on.
+// suffix-parsing logic stays covered end to end. Each condition is
+// pre-obfuscated with obfuscateCond before runCheck deobfuscates it, which
+// mirrors the production-supported path and keeps test output free of
+// cosmetic deobfuscation noise.
 func TestRunCheckContains(t *testing.T) {
 	const (
 		dirPath     = "misc/tests/dir"
@@ -146,13 +163,9 @@ func TestRunCheckContains(t *testing.T) {
 		{"DirContainsRegex/malformed_regex_error_returns_false", cond{Type: "DirContainsRegex", Path: dirPath, Value: "["}, false},
 		{"DirContainsRegex/missing_path_error_returns_false", cond{Type: "DirContainsRegex", Path: missingPath, Value: "^efgh"}, false},
 
-		// DirContainsRegexNot: the malformed-regex case is intentionally
-		// omitted. DirContains swallows per-file regexp syntax errors and
-		// returns (false, nil), so the negation would yield true rather
-		// than an error-driven false. Recorded in
-		// .omo/notepads/freebsd-support/issues.md.
 		{"DirContainsRegexNot/negated_positive_flips_to_false", cond{Type: "DirContainsRegexNot", Path: dirPath, Value: "^efgh"}, false},
 		{"DirContainsRegexNot/negated_negative_flips_to_true", cond{Type: "DirContainsRegexNot", Path: dirPath, Value: "^zzzzz"}, true},
+		{"DirContainsRegexNot/malformed_regex_error_returns_false", cond{Type: "DirContainsRegexNot", Path: dirPath, Value: "["}, false},
 		{"DirContainsRegexNot/missing_path_error_returns_false", cond{Type: "DirContainsRegexNot", Path: missingPath, Value: "^efgh"}, false},
 
 		{"FileContains/literal_positive_match", cond{Type: "FileContains", Path: filePath, Value: "hello"}, true},
@@ -176,7 +189,11 @@ func TestRunCheckContains(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := runCheck(tt.c)
+			c := tt.c
+			if err := obfuscateCond(&c); err != nil {
+				t.Fatalf("obfuscateCond(%+v) = %v", tt.c, err)
+			}
+			got := runCheck(c)
 			if got != tt.want {
 				t.Errorf("runCheck(Type=%q, Path=%q, Value=%q) = %v, want %v",
 					tt.c.Type, tt.c.Path, tt.c.Value, got, tt.want)

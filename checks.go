@@ -209,7 +209,7 @@ func (c cond) DirContains() (bool, error) {
 	for _, file := range files {
 		c.Path = file
 		result, err := c.FileContains()
-		if os.IsPermission(err) {
+		if err != nil {
 			return false, err
 		}
 		if result {
