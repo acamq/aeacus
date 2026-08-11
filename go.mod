@@ -1,6 +1,8 @@
 module github.com/elysium-suite/aeacus
 
-go 1.19
+go 1.26.0
+
+toolchain go1.26.5
 
 require (
 	github.com/ActiveState/termtest/conpty v0.5.0
@@ -16,7 +18,7 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.8.0
 	github.com/urfave/cli/v2 v2.14.0
-	golang.org/x/sys v0.0.0-20220829200755-d48e67d00261
+	golang.org/x/sys v0.47.0
 	golang.org/x/text v0.3.8
 )
 
