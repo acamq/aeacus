@@ -107,8 +107,7 @@ func readScoringData() error {
 		info("Data decryption successful!")
 	}
 
-	parseConfig(decryptedData)
-	return nil
+	return parseConfig(decryptedData)
 }
 
 // ScoreImage is the main function for scoring the image.

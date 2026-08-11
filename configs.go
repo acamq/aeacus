@@ -6,21 +6,46 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"runtime"
 
 	"github.com/BurntSushi/toml"
 )
 
 // parseConfig takes the config content as a string and attempts to parse it
 // into the conf struct based on the TOML spec.
-func parseConfig(configContent string) {
+func parseConfig(configContent string) error {
 	if configContent == "" {
-		fail("Configuration is empty!")
-		os.Exit(1)
+		return fmt.Errorf("configuration is empty")
 	}
-	md, err := toml.Decode(configContent, &conf)
+	candidate := &config{}
+	md, err := toml.Decode(configContent, candidate)
 	if err != nil {
-		fail("Error decoding TOML: " + err.Error())
-		os.Exit(1)
+		return fmt.Errorf("decode TOML: %w", err)
+	}
+
+	// If there's no remote, local must be enabled.
+	if candidate.Remote == "" {
+		candidate.Local = true
+		if candidate.DisableRemoteEncryption {
+			return fmt.Errorf("remote encryption cannot be disabled if remote is not enabled")
+		}
+	} else {
+		if candidate.Remote[len(candidate.Remote)-1] == '/' {
+			return fmt.Errorf("remote URL must not end with a slash: try %s", candidate.Remote[:len(candidate.Remote)-1])
+		}
+		if candidate.Name == "" {
+			return fmt.Errorf("image name is required when remote is enabled")
+		}
+		if candidate.Password == "" && !candidate.DisableRemoteEncryption {
+			return fmt.Errorf("password is required when remote is enabled")
+		}
+		if candidate.DisableRemoteEncryption && candidate.Password != "" {
+			warn("Remote encryption is disabled, but a password is still defined!")
+		}
+	}
+
+	if err := validateConfigConditions(candidate, runtime.GOOS); err != nil {
+		return err
 	}
 	if verboseEnabled {
 		for _, undecoded := range md.Undecoded() {
@@ -28,53 +53,20 @@ func parseConfig(configContent string) {
 		}
 	}
 
-	// If there's no remote, local must be enabled.
-	if conf.Remote == "" {
-		conf.Local = true
-		if conf.DisableRemoteEncryption {
-			fail("Remote encryption cannot be disabled if remote is not enabled!")
-			os.Exit(1)
-		}
-	} else {
-		if conf.Remote[len(conf.Remote)-1] == '/' {
-			fail("Your remote URL must not end with a slash: try", conf.Remote[:len(conf.Remote)-1])
-			os.Exit(1)
-		}
-		if conf.Name == "" {
-			fail("Need image name in config if remote is enabled.")
-			os.Exit(1)
-		}
-
-		if conf.Password == "" && conf.DisableRemoteEncryption == false {
-			fail("Need password in config if remote is enabled.")
-			os.Exit(1)
-		}
-
-		if conf.DisableRemoteEncryption && conf.Password != "" {
-			warn("Remote encryption is disabled, but a password is still defined!")
-		}
-
-	}
-
 	// Check if the config version matches ours.
-	if conf.Version != version {
+	if candidate.Version != version {
 		warn("Scoring version does not match Aeacus version! Compatibility issues may occur.")
 		info("Consider updating your config to include:")
 		info("    version = '" + version + "'")
 	}
 
-	// Print warnings for impossible checks and undefined check types.
-	for i, check := range conf.Check {
+	for i, check := range candidate.Check {
 		if len(check.Pass) == 0 && len(check.PassOverride) == 0 {
 			warn("Check " + fmt.Sprintf("%d", i+1) + " does not define any possible ways to pass!")
 		}
-		allConditions := append(append(append([]cond{}, check.Pass[:]...), check.Fail[:]...), check.PassOverride[:]...)
-		for j, cond := range allConditions {
-			if cond.Type == "" {
-				warn("Check " + fmt.Sprintf("%d condition %d", i+1, j+1) + " does not have a check type!")
-			}
-		}
 	}
+	conf = candidate
+	return nil
 }
 
 // writeConfig writes the in-memory config to disk as the an encrypted
@@ -100,19 +92,21 @@ func writeConfig() {
 }
 
 // ReadConfig parses the scoring configuration file.
-func readConfig() {
+func readConfig() error {
 	fileContent, err := readFile(dirPath + scoringConf)
 	if err != nil {
-		fail("Configuration file (" + dirPath + scoringConf + ") not found!")
-		os.Exit(1)
+		return fmt.Errorf("configuration file (%s%s) not found: %w", dirPath, scoringConf, err)
 	}
-	parseConfig(fileContent)
+	if err := parseConfig(fileContent); err != nil {
+		return err
+	}
 	assignPoints()
 	assignDescriptions()
 	if verboseEnabled {
 		printConfig()
 	}
 	obfuscateConfig()
+	return nil
 }
 
 // PrintConfig offers a printed representation of the config, as parsed

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -98,61 +99,49 @@ func (c cond) String() string {
 	return output
 }
 
-func handleReflectPanic(condFunc string) {
-	if r := recover(); r != nil {
-		fail("Check type does not exist: "+condFunc, "("+r.(*reflect.ValueError).Error()+")")
-	}
-}
-
 // runCheck executes a single condition check.
-func runCheck(cond cond) bool {
+func runCheck(cond cond) (passed bool) {
 	if err := deobfuscateCond(&cond); err != nil {
 		fail(err.Error())
+		return false
 	}
 	defer obfuscateCond(&cond)
 	debug("Running condition:\n", cond)
 
-	not := "Not"
-	regex := "Regex"
-	condFunc := ""
-	negation := false
-	cond.regex = false
-
-	// Ensure that condition type is a valid length
-	if len(cond.Type) <= len(regex) {
-		fail(`Condition type "` + cond.Type + `" is not long enough to be valid. Do you have a "type = 'CheckTypeHere'" for all check conditions?`)
+	parsed, err := parseConditionType(cond.Type)
+	if err != nil {
+		fail(err.Error())
 		return false
 	}
-	condFunc = cond.Type
-	if condFunc[len(condFunc)-len(not):] == not {
-		negation = true
-		condFunc = condFunc[:len(condFunc)-len(not)]
+	if err := validateConditionCapability(runtime.GOOS, parsed); err != nil {
+		fail(fmt.Sprintf("Condition type %q is unavailable on GOOS %s: %v", cond.Type, runtime.GOOS, err))
+		return false
 	}
-	if condFunc[len(condFunc)-len(regex):] == regex {
-		cond.regex = true
-		condFunc = condFunc[:len(condFunc)-len(regex)]
-	}
+	cond.regex = parsed.Regex
 
-	// Catch panic if check type doesn't exist
-	defer handleReflectPanic(condFunc)
+	methodName := parsed.Base
+	originalType := cond.Type
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			fail(fmt.Sprintf("Condition type %q failed on GOOS %s before calling %s: %v", originalType, runtime.GOOS, methodName, recovered))
+			passed = false
+		}
+	}()
 
-	// Using reflection to find the correct function to call.
-	vals := reflect.ValueOf(cond).MethodByName(condFunc).Call([]reflect.Value{})
+	vals := reflect.ValueOf(cond).MethodByName(parsed.Base).Call(nil)
 	result := vals[0].Bool()
-	err := vals[1]
+	conditionErr := vals[1]
 
-	if negation {
-		debug("Result is", !result, "(was", result, "before negation) and error is", err)
-		return err.IsNil() && !result
+	if parsed.Negated {
+		debug("Result is", !result, "(was", result, "before negation) and error is", conditionErr)
+		return conditionErr.IsNil() && !result
 	}
 
-	debug("Result is", result, "and error is", err)
-
-	if verboseEnabled && !err.IsNil() {
-		warn(condFunc, "returned an error:", err)
+	debug("Result is", result, "and error is", conditionErr)
+	if verboseEnabled && !conditionErr.IsNil() {
+		warn(parsed.Base, "returned an error:", conditionErr)
 	}
-
-	return err.IsNil() && result
+	return conditionErr.IsNil() && result
 }
 
 // CommandContains checks if a given shell command contains a certain string.

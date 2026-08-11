@@ -38,7 +38,9 @@ func main() {
 		},
 		Action: func(c *cli.Context) error {
 			permsCheck()
-			readConfig()
+			if err := readConfig(); err != nil {
+				return err
+			}
 			scoreImage()
 			return nil
 		},
@@ -75,7 +77,9 @@ func main() {
 				Usage:   "Score image with current scoring config",
 				Action: func(c *cli.Context) error {
 					permsCheck()
-					readConfig()
+					if err := readConfig(); err != nil {
+						return err
+					}
 					scoreImage()
 					return nil
 				},
@@ -85,8 +89,7 @@ func main() {
 				Aliases: []string{"c"},
 				Usage:   "Check that the scoring config is valid",
 				Action: func(c *cli.Context) error {
-					readConfig()
-					return nil
+					return readConfig()
 				},
 			},
 			{
@@ -95,7 +98,9 @@ func main() {
 				Usage:   "Compile the README",
 				Action: func(c *cli.Context) error {
 					permsCheck()
-					readConfig()
+					if err := readConfig(); err != nil {
+						return err
+					}
 					genReadMe()
 					return nil
 				},
@@ -106,7 +111,9 @@ func main() {
 				Usage:   "Encrypt scoring configuration",
 				Action: func(c *cli.Context) error {
 					permsCheck()
-					readConfig()
+					if err := readConfig(); err != nil {
+						return err
+					}
 					writeConfig()
 					return nil
 				},
@@ -157,6 +164,7 @@ func main() {
 	err := app.Run(os.Args)
 	if err != nil {
 		fail(err.Error())
+		os.Exit(1)
 	}
 }
 
@@ -164,7 +172,10 @@ func main() {
 // writing the ReadMe/Desktop Files, installing the system service,
 // and cleaning the image for release.
 func releaseImage() {
-	readConfig()
+	if err := readConfig(); err != nil {
+		fail(err.Error())
+		return
+	}
 	writeConfig()
 	genReadMe()
 	writeDesktopFiles()
