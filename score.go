@@ -61,23 +61,6 @@ type hintItem struct {
 	Points   int
 }
 
-// config is a representation of the TOML configuration typically
-// specific in scoring.conf.
-type config struct {
-	DisableRemoteEncryption bool
-	Local                   bool
-	Shell                   bool
-	EndDate                 string
-	Name                    string
-	OS                      string
-	Password                string
-	Remote                  string
-	Title                   string
-	User                    string
-	Version                 string
-	Check                   []check
-}
-
 // statusRes is to parse a JSON response from the remote server.
 type statusRes struct {
 	Status string `json:"status"`

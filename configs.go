@@ -44,6 +44,11 @@ func parseConfig(configContent string) error {
 			warn("Remote encryption is disabled, but a password is still defined!")
 		}
 	}
+	resolved, err := resolveRuntimeCapabilities(*candidate)
+	if err != nil {
+		return err
+	}
+	candidate = &resolved
 
 	if err := validateConfigConditions(candidate, runtime.GOOS); err != nil {
 		return err
