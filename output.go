@@ -127,7 +127,7 @@ func green(head string, p ...interface{}) {
 func printer(colorChosen color.Attribute, messageType, toPrint string) string {
 	printer := color.New(colorChosen, color.Bold)
 	printStr := "["
-	printStr += printer.Sprintf(messageType)
+	printStr += printer.Sprintf("%s", messageType)
 	printStr += fmt.Sprintf("] %s", toPrint)
 	return printStr
 }
