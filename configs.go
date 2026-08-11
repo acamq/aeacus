@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"runtime"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -49,6 +50,12 @@ func parseConfig(configContent string) error {
 	}
 	if verboseEnabled {
 		for _, undecoded := range md.Undecoded() {
+			if len(undecoded) == 3 && strings.EqualFold(undecoded[0], "check") {
+				switch strings.ToLower(undecoded[1]) {
+				case "pass", "fail", "passoverride":
+					continue
+				}
+			}
 			warn("Undecoded scoring configuration key \"" + undecoded.String() + "\" will not be used.")
 		}
 	}

@@ -152,8 +152,6 @@ func main() {
 				Aliases: []string{"r"},
 				Usage:   "Prepare the image for release",
 				Action: func(c *cli.Context) error {
-					permsCheck()
-					confirm("Are you sure you want to begin the image release process?")
 					return releaseImage()
 				},
 			},
@@ -174,6 +172,8 @@ func releaseImage() error {
 	if err := readConfig(); err != nil {
 		return err
 	}
+	permsCheck()
+	confirm("Are you sure you want to begin the image release process?")
 	writeConfig()
 	genReadMe()
 	writeDesktopFiles()

@@ -105,7 +105,7 @@ func TestParseConfigRejectsWrongConditionFieldType(t *testing.T) {
 	if err == nil {
 		t.Fatal("parseConfig() error = nil")
 	}
-	for _, expected := range []string{"PathExists", runtime.GOOS, "path"} {
+	for _, expected := range []string{"PathExists", runtime.GOOS, "Path"} {
 		if !strings.Contains(err.Error(), expected) {
 			t.Errorf("error %q does not contain %q", err, expected)
 		}
