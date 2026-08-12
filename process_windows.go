@@ -3,7 +3,7 @@
 package main
 
 func shellCommand(commandGiven string) error {
-	err := rawCmd(commandGiven).Run()
+	err := rawCmd(powerShellReleaseScript(commandGiven)).Run()
 	if err != nil && verboseEnabled {
 		printShellCommandError(commandGiven, err)
 	}
@@ -11,7 +11,7 @@ func shellCommand(commandGiven string) error {
 }
 
 func shellCommandOutput(commandGiven string) (string, error) {
-	output, err := rawCmd(commandGiven).Output()
+	output, err := rawCmd(powerShellReleaseScript(commandGiven)).Output()
 	debugShellCommand(commandGiven, output, err)
 	if err != nil {
 		if verboseEnabled {
@@ -20,4 +20,13 @@ func shellCommandOutput(commandGiven string) (string, error) {
 		return "", err
 	}
 	return string(output), nil
+}
+
+func powerShellReleaseScript(commandGiven string) string {
+	return `trap { exit 1 }
+$ErrorActionPreference = 'Stop'
+$global:LASTEXITCODE = 0
+& { ` + commandGiven + ` }
+$nativeExitCode = $LASTEXITCODE
+if ($nativeExitCode -ne 0) { exit $nativeExitCode }`
 }

@@ -2,6 +2,8 @@ package main
 
 import (
 	"crypto/md5"
+	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -97,15 +99,27 @@ func hashFileMD5(filePath string) (string, error) {
 }
 
 func adminCheck() bool {
-	currentUser, err := user.Current()
-	uid, _ := strconv.Atoi(currentUser.Uid)
+	administrator, err := checkLinuxAdministrator(user.Current)
 	if err != nil {
 		fail("Error for checking if running as root: " + err.Error())
 		return false
-	} else if uid != 0 {
-		return false
 	}
-	return true
+	return administrator
+}
+
+func checkLinuxAdministrator(currentUser func() (*user.User, error)) (bool, error) {
+	account, err := currentUser()
+	if err != nil {
+		return false, fmt.Errorf("lookup current user: %w", err)
+	}
+	if account == nil {
+		return false, errors.New("lookup current user returned no account")
+	}
+	uid, err := strconv.ParseUint(account.Uid, 10, 32)
+	if err != nil {
+		return false, fmt.Errorf("parse current user UID %q: %w", account.Uid, err)
+	}
+	return uid == 0, nil
 }
 
 func getInfo(infoType string) {

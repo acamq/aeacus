@@ -106,7 +106,8 @@ func cleanUp() error {
 	}
 
 	info("Removing .viminfo and .swp files...")
-	if err := runReleaseCommands("find " + findPaths + " -iname '*.viminfo*' -delete -iname '*.swp' -delete"); err != nil {
+	cleanupCommands := linuxForensicCleanupCommands()
+	if err := runReleaseCommands(cleanupCommands[:2]...); err != nil {
 		return err
 	}
 
@@ -159,15 +160,29 @@ func cleanUp() error {
 	}
 
 	info("Installing BleachBit...")
-	if err := runReleaseCommands("apt-get install -y bleachbit"); err != nil {
+	if err := runReleaseCommands(linuxBleachBitInstallCommands()...); err != nil {
 		return err
 	}
 
 	info("Clearing Firefox cache and browsing history...")
-	if err := runReleaseCommands("bleachbit --clean firefox.url_history; bleachbit --clean firefox.cache"); err != nil {
+	if err := runReleaseCommands(cleanupCommands[2:]...); err != nil {
 		return err
 	}
 
 	info("Overwriting timestamps to obfuscate changes...")
 	return runReleaseCommands(`find /etc /home /var -exec touch --date='2012-12-12 12:12' {} \; 2>/dev/null`)
+}
+
+func linuxForensicCleanupCommands() []string {
+	findPaths := "/bin /etc /home /opt /root /sbin /srv /usr /mnt /var"
+	return []string{
+		"find " + findPaths + " -iname '*.viminfo*' -delete",
+		"find " + findPaths + " -iname '*.swp' -delete",
+		"bleachbit --clean firefox.url_history",
+		"bleachbit --clean firefox.cache",
+	}
+}
+
+func linuxBleachBitInstallCommands() []string {
+	return []string{"apt-get update", "apt-get install -y bleachbit"}
 }

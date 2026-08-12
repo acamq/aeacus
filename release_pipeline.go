@@ -27,6 +27,8 @@ var errReleaseDeclined = errors.New("release declined")
 
 var errReleaseAdministratorRequired = errors.New("administrator permissions are required")
 
+var releaseAdministratorCheck = adminCheck
+
 type releaseStageError struct {
 	Stage releaseStage
 	Err   error
@@ -72,7 +74,7 @@ func runReleasePipeline(stages releaseStages) error {
 }
 
 func checkReleasePermissions() error {
-	if !adminCheck() {
+	if !releaseAdministratorCheck() {
 		return errReleaseAdministratorRequired
 	}
 	return nil
