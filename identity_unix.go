@@ -152,6 +152,9 @@ func (d unixIdentityDatabase) readGroup() ([]byte, error) {
 func parseUnixPasswd(data []byte) (map[string]unixUserRecord, error) {
 	users := make(map[string]unixUserRecord)
 	for index, line := range strings.Split(string(data), "\n") {
+		if strings.ContainsRune(line, '\r') {
+			return nil, &unixIdentityError{Kind: ErrUnixIdentityMalformed, Path: unixPasswdPath, Line: index + 1}
+		}
 		if ignoredUnixIdentityLine(line) {
 			continue
 		}
@@ -178,6 +181,9 @@ func parseUnixPasswd(data []byte) (map[string]unixUserRecord, error) {
 func parseUnixGroup(data []byte) (map[string]unixGroupRecord, error) {
 	groups := make(map[string]unixGroupRecord)
 	for index, line := range strings.Split(string(data), "\n") {
+		if strings.ContainsRune(line, '\r') {
+			return nil, &unixIdentityError{Kind: ErrUnixIdentityMalformed, Path: unixGroupPath, Line: index + 1}
+		}
 		if ignoredUnixIdentityLine(line) {
 			continue
 		}

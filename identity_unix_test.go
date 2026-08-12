@@ -171,6 +171,52 @@ func TestUnixIdentityAllowsBlankCommentsAndTrailingNewline(t *testing.T) {
 	}
 }
 
+func TestUnixIdentityRejectsCarriageReturnsInRecords(t *testing.T) {
+	tests := []struct {
+		name string
+		call func() (bool, error)
+		path string
+	}{
+		{
+			name: "passwd record during user lookup",
+			call: func() (bool, error) {
+				return fixtureIdentity("alice:x:1000:2000::/:/bin/sh\r\n", "").UserExists("alice")
+			},
+			path: unixPasswdPath,
+		},
+		{
+			name: "passwd record during membership lookup",
+			call: func() (bool, error) {
+				return fixtureIdentity("alice:x:1000:2000::/:/bin/sh\r\n", "staff:x:2000:\n").UserInGroup("alice", "staff")
+			},
+			path: unixPasswdPath,
+		},
+		{
+			name: "primary group record",
+			call: func() (bool, error) {
+				return fixtureIdentity("alice:x:1000:2000::/:/bin/sh\n", "staff:x:2000:\r\n").UserInGroup("alice", "staff")
+			},
+			path: unixGroupPath,
+		},
+		{
+			name: "supplementary group record",
+			call: func() (bool, error) {
+				return fixtureIdentity("alice:x:1000:2000::/:/bin/sh\n", "staff:x:3000:alice\r\n").UserInGroup("alice", "staff")
+			},
+			path: unixGroupPath,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.call()
+			if got || !errors.Is(err, ErrUnixIdentityMalformed) {
+				t.Fatalf("CRLF identity lookup = (%v, %v), want (false, malformed error)", got, err)
+			}
+			assertUnixIdentityError(t, err, tt.path)
+		})
+	}
+}
+
 func assertUnixIdentityError(t *testing.T, err error, path string) {
 	t.Helper()
 	var identityErr *unixIdentityError
