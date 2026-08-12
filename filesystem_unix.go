@@ -137,7 +137,7 @@ func statUnixFile(path string) (os.FileInfo, error) {
 }
 
 func parseUnixMode(raw string) (unixModeExpectation, error) {
-	value := raw
+	value := strings.TrimSpace(raw)
 	if len(value) == 10 {
 		if strings.IndexByte(unixFileTypeSymbols, value[0]) < 0 {
 			return unixModeExpectation{}, &unixModeError{Value: value, Index: 0}

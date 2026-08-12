@@ -67,11 +67,37 @@ func TestUnixModeMatchesWildcardsAndIgnoresFileType(t *testing.T) {
 	}
 }
 
+func TestUnixModeTrimsSurroundingUnicodeWhitespace(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "reported ASCII whitespace", value: " rw-------\n"},
+		{name: "Unicode whitespace", value: "\u2003?rw-------\u00a0"},
+		{name: "special bits", value: "\t rws--S--t \r\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			expected, err := parseUnixMode(tt.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual := os.FileMode(0o600)
+			if tt.name == "special bits" {
+				actual = 0o701 | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
+			}
+			if !unixModeMatches(actual, expected) {
+				t.Fatalf("trimmed mode %q did not match %v", tt.value, actual)
+			}
+		})
+	}
+}
+
 func TestUnixModeRejectsMalformedSymbolicModes(t *testing.T) {
 	for _, value := range []string{
 		"rwx", "rwxrwxrwxq", "rwsrwxrwz", "srwxrwxrw", "xrwxrwxrwx", "rwtrwxrwx", "rwxrwt rwx",
-		" rwxrwxrwx", "rwxrwxrwx ", "\trwxrwxrwx", "rwxrwxrwé", "!rwxrwxrwx", "xrwxrwxrwx",
-		"rwt------", "-----T---", "--------s",
+		"rwxrwxrwé", "!rwxrwxrwx", "xrwxrwxrwx", "rwt------", "-----T---", "--------s",
+		"", " \t\r\n", " rwx ", "rwx rwxrwx", "rw\x00r-----", string([]byte{0xff, 'r', 'w', '-', 'r', '-', '-', '-', '-', '-'}),
 	} {
 		t.Run(fmt.Sprintf("%q", value), func(t *testing.T) {
 			_, err := parseUnixMode(value)

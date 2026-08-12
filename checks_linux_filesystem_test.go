@@ -26,6 +26,65 @@ func TestLinuxPermissionIsPreservesSymbolicSyntax(t *testing.T) {
 	}
 }
 
+func TestLinuxPermissionIsTrimsSurroundingWhitespace(t *testing.T) {
+	path, _, _ := ownedUnixFixture(t)
+	got, err := (cond{Path: path, Value: "\t rw------- \r\n"}).PermissionIs()
+	t.Logf("trimmed-adapter actual=%t expected=true error_class=%s", got, unixErrorClass(err))
+	if err != nil || !got {
+		t.Fatalf("trimmed PermissionIs = (%v, %v), want (true, nil)", got, err)
+	}
+}
+
+func TestLinuxPermissionWhitespaceRunCheckIsDeterminate(t *testing.T) {
+	path, _, _ := ownedUnixFixture(t)
+	tests := []struct {
+		name      string
+		condition cond
+		want      bool
+	}{
+		{name: "trimmed valid passes", condition: cond{Type: "PermissionIs", Path: path, Value: "\t rw------- \r\n"}, want: true},
+		{name: "trimmed valid negation fails", condition: cond{Type: "PermissionIsNot", Path: path, Value: "\u2003rw-------\u00a0"}, want: false},
+		{name: "internal whitespace negation fails closed", condition: cond{Type: "PermissionIsNot", Path: path, Value: "rw- --- ---"}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := obfuscateCond(&tt.condition); err != nil {
+				t.Fatal(err)
+			}
+			if got := runCheck(tt.condition); got != tt.want {
+				t.Fatalf("runCheck = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLinuxPermissionWhitespaceScoringIsFailClosed(t *testing.T) {
+	path, _, _ := ownedUnixFixture(t)
+	previousImage := image
+	t.Cleanup(func() { image = previousImage })
+	tests := []struct {
+		name      string
+		condition cond
+		wantScore int
+	}{
+		{name: "trimmed valid scores", condition: cond{Type: "PermissionIs", Path: path, Value: "\t rw------- \r\n"}, wantScore: 7},
+		{name: "internal whitespace does not score", condition: cond{Type: "PermissionIsNot", Path: path, Value: "rw- --- ---"}, wantScore: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			image = &imageData{}
+			if err := obfuscateCond(&tt.condition); err != nil {
+				t.Fatal(err)
+			}
+			scoreCheck(check{Points: 7, Pass: []cond{tt.condition}})
+			t.Logf("score-case=%s actual=%d expected=%d", tt.name, image.Score, tt.wantScore)
+			if image.Score != tt.wantScore {
+				t.Fatalf("score = %d, want %d", image.Score, tt.wantScore)
+			}
+		})
+	}
+}
+
 func TestLinuxFilesystemNegationDoesNotRewardErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing")
 	tests := []cond{
