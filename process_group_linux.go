@@ -5,42 +5,59 @@ package main
 import (
 	"errors"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-type osGroupSignalFactory struct{}
+type osProcessGroupFactory struct{}
 
-func (osGroupSignalFactory) Open(pid int) (groupSignalTarget, error) {
-	fd, err := unix.PidfdOpen(pid, 0)
+func (osProcessGroupFactory) Open(pid int) (processGroup, error) {
+	pidfd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
 		return nil, err
 	}
-	return &linuxGroupSignalTarget{pid: pid, pidfd: fd}, nil
+	group := &linuxProcessGroup{pid: pid, pidfd: pidfd, exited: make(chan error, 1)}
+	go group.observeLeader()
+	return group, nil
 }
 
-type linuxGroupSignalTarget struct {
+type linuxProcessGroup struct {
 	pid    int
 	pidfd  int
-	exited bool
+	exited chan error
 }
 
-func (g *linuxGroupSignalTarget) Close() { unix.Close(g.pidfd) }
+func (g *linuxProcessGroup) LeaderExited() <-chan error { return g.exited }
+func (g *linuxProcessGroup) Changed() <-chan struct{} {
+	changed := make(chan struct{}, 1)
+	time.AfterFunc(time.Millisecond, func() { changed <- struct{}{} })
+	return changed
+}
+func (g *linuxProcessGroup) Close() { unix.Close(g.pidfd) }
 
-func (g *linuxGroupSignalTarget) Signal(signal syscall.Signal) error {
-	if g.exited {
-		return nil
-	}
-	if err := unix.Waitid(unix.P_PIDFD, g.pidfd, nil, unix.WEXITED|unix.WNOHANG|unix.WNOWAIT, nil); err != nil {
-		if errors.Is(err, syscall.ESRCH) || errors.Is(err, syscall.ECHILD) {
-			g.exited = true
-			return nil
-		}
-		return err
-	}
+func (g *linuxProcessGroup) observeLeader() {
+	var info unix.Siginfo
+	g.exited <- unix.Waitid(unix.P_PIDFD, g.pidfd, &info, unix.WEXITED|unix.WNOWAIT, nil)
+}
+
+func (g *linuxProcessGroup) Signal(signal syscall.Signal) error {
 	err := syscall.Kill(-g.pid, signal)
 	if errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
 	return err
+}
+
+func (g *linuxProcessGroup) Alive() (bool, error) {
+	entries, err := readLinuxProcesses()
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if entry.group == g.pid && (entry.pid != g.pid || entry.state != 'Z') {
+			return true, nil
+		}
+	}
+	return false, nil
 }

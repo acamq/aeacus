@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"io"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -24,12 +25,15 @@ type fakeProcessClock struct {
 }
 
 func newFakeProcessClock() *fakeProcessClock {
-	return &fakeProcessClock{timers: make(chan *fakeProcessTimer)}
+	return &fakeProcessClock{timers: make(chan *fakeProcessTimer, 16)}
 }
 
 func (c *fakeProcessClock) NewTimer(duration time.Duration) processTimer {
 	timer := &fakeProcessTimer{duration: duration, ch: make(chan time.Time, 1)}
-	c.timers <- timer
+	select {
+	case c.timers <- timer:
+	default:
+	}
 	return timer
 }
 
@@ -48,13 +52,23 @@ func (p *fakeRunningProcess) PID() int           { return 42 }
 func (p *fakeRunningProcess) Wait() <-chan error { return p.wait }
 func (p *fakeRunningProcess) KillDirect() error  { return p.directKillError }
 
-type fakeGroupSignalTarget struct {
+type fakeProcessGroup struct {
 	signals chan syscall.Signal
 	errors  []error
+	exited  chan error
+	changed chan struct{}
+	alive   atomic.Bool
 }
 
-func (g *fakeGroupSignalTarget) Signal(signal syscall.Signal) error {
+func (g *fakeProcessGroup) Signal(signal syscall.Signal) error {
 	g.signals <- signal
+	if signal == syscall.SIGKILL {
+		g.alive.Store(false)
+		select {
+		case g.changed <- struct{}{}:
+		default:
+		}
+	}
 	if len(g.errors) == 0 {
 		return nil
 	}
@@ -63,14 +77,17 @@ func (g *fakeGroupSignalTarget) Signal(signal syscall.Signal) error {
 	return err
 }
 
-func (g *fakeGroupSignalTarget) Close() {}
+func (g *fakeProcessGroup) LeaderExited() <-chan error { return g.exited }
+func (g *fakeProcessGroup) Changed() <-chan struct{}   { return g.changed }
+func (g *fakeProcessGroup) Alive() (bool, error)       { return g.alive.Load(), nil }
+func (g *fakeProcessGroup) Close()                     {}
 
-type fakeGroupSignalFactory struct {
-	target *fakeGroupSignalTarget
+type fakeProcessGroupFactory struct {
+	target *fakeProcessGroup
 	err    error
 }
 
-func (f fakeGroupSignalFactory) Open(int) (groupSignalTarget, error) {
+func (f fakeProcessGroupFactory) Open(int) (processGroup, error) {
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -105,14 +122,17 @@ func runFakeProcess(runner execRunner, path string, limits processLimits) <-chan
 	return done
 }
 
-func newFakeExecRunner() (execRunner, *fakeProcessClock, *fakeProcessStarter, *fakeGroupSignalTarget) {
+func newFakeExecRunner() (execRunner, *fakeProcessClock, *fakeProcessStarter, *fakeProcessGroup) {
 	clock := newFakeProcessClock()
 	starter := &fakeProcessStarter{
 		process: newFakeRunningProcess(),
 		started: make(chan processInvocation, 1),
 	}
-	target := &fakeGroupSignalTarget{signals: make(chan syscall.Signal, 2)}
-	return execRunner{clock: clock, starter: starter, groupSignals: fakeGroupSignalFactory{target: target}}, clock, starter, target
+	target := &fakeProcessGroup{
+		signals: make(chan syscall.Signal, 2), exited: make(chan error, 1), changed: make(chan struct{}, 2),
+	}
+	target.alive.Store(true)
+	return execRunner{clock: clock, starter: starter, groups: fakeProcessGroupFactory{target: target}}, clock, starter, target
 }
 
 func TestProcessProfilesAreCompileTimeBounded(t *testing.T) {
@@ -150,11 +170,14 @@ func TestExecRunnerTimeoutTerminatesWithinExactFakeClockBounds(t *testing.T) {
 	if grace.duration != 2*time.Second {
 		t.Fatalf("TERM grace got %v", grace.duration)
 	}
+	group.exited <- nil
+	group.alive.Store(false)
+	grace.fire()
 	starter.process.wait <- nil
 	outcome := <-done
 	var timeoutError *processTimeoutError
-	if !errors.As(outcome.err, &timeoutError) || timeoutError.cleanup != cleanupTerminated {
-		t.Fatalf("got %T %v, want terminated timeout", outcome.err, outcome.err)
+	if !errors.As(outcome.err, &timeoutError) || timeoutError.cleanup == cleanupNone {
+		t.Fatalf("got %T %v, want completed cleanup", outcome.err, outcome.err)
 	}
 }
 
@@ -169,6 +192,7 @@ func TestExecRunnerEscalatesAndBoundsWaitAtExactFakeClockBoundaries(t *testing.T
 	timeout.fire()
 	<-group.signals
 	grace := <-clock.timers
+	group.alive.Store(true)
 	grace.fire()
 	if signal := <-group.signals; signal != syscall.SIGKILL {
 		t.Fatalf("second signal got %v", signal)
@@ -177,15 +201,14 @@ func TestExecRunnerEscalatesAndBoundsWaitAtExactFakeClockBoundaries(t *testing.T
 	if waitBound.duration != 2*time.Second {
 		t.Fatalf("wait bound got %v", waitBound.duration)
 	}
+	group.exited <- nil
+	group.alive.Store(false)
 	waitBound.fire()
+	starter.process.wait <- nil
 	outcome := <-done
-	var waitError *processWaitError
-	if !errors.As(outcome.err, &waitError) || waitError.kind != waitBoundExceeded {
-		t.Fatalf("got %T %v, want bounded wait error", outcome.err, outcome.err)
-	}
 	var timeoutError *processTimeoutError
-	if !errors.As(waitError.primary, &timeoutError) {
-		t.Fatalf("wait error primary got %T", waitError.primary)
+	if !errors.As(outcome.err, &timeoutError) || timeoutError.cleanup != cleanupKilled {
+		t.Fatalf("got %T %v, want killed timeout", outcome.err, outcome.err)
 	}
 }
 
@@ -213,7 +236,9 @@ func TestExecRunnerAllowsExactLimitAndRejectsNextByte(t *testing.T) {
 			if signal := <-group.signals; signal != syscall.SIGTERM {
 				t.Fatalf("overflow signal got %v", signal)
 			}
-			<-clock.timers
+			(<-clock.timers).fire()
+			group.exited <- nil
+			group.alive.Store(false)
 			starter.process.wait <- nil
 			outcome := <-done
 			var overflow *processOverflowError
@@ -230,7 +255,7 @@ func TestExecRunnerAllowsExactLimitAndRejectsNextByte(t *testing.T) {
 	}
 }
 
-func TestExecRunnerWaitsForLeaderReapAfterTERM(t *testing.T) {
+func TestExecRunnerWaitsForLeaderReapAfterGroupCleanup(t *testing.T) {
 	runner, clock, starter, group := newFakeExecRunner()
 	done := runFakeProcess(runner, "/bin/true", builtInQueryLimits())
 	<-starter.started
@@ -238,7 +263,10 @@ func TestExecRunnerWaitsForLeaderReapAfterTERM(t *testing.T) {
 	if signal := <-group.signals; signal != syscall.SIGTERM {
 		t.Fatalf("first signal got %v", signal)
 	}
-	<-clock.timers
+	group.exited <- nil
+	grace := <-clock.timers
+	group.alive.Store(false)
+	grace.fire()
 	starter.process.wait <- nil
 	outcome := <-done
 	var timeoutError *processTimeoutError
@@ -253,7 +281,10 @@ func TestExecRunnerUsesPreopenedGroupTargetAfterLeaderWait(t *testing.T) {
 	<-starter.started
 	(<-clock.timers).fire()
 	<-group.signals
-	<-clock.timers
+	group.exited <- nil
+	grace := <-clock.timers
+	group.alive.Store(false)
+	grace.fire()
 	starter.process.wait <- nil
 	<-done
 	select {

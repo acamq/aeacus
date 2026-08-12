@@ -154,14 +154,16 @@ type processStarter interface {
 	Start(processInvocation) (runningProcess, error)
 }
 
-// The target must retain process identity independently of numeric PID reuse.
-type groupSignalTarget interface {
+type processGroup interface {
+	LeaderExited() <-chan error
+	Changed() <-chan struct{}
+	Alive() (bool, error)
 	Signal(syscall.Signal) error
 	Close()
 }
 
-type groupSignalFactory interface {
-	Open(int) (groupSignalTarget, error)
+type processGroupFactory interface {
+	Open(int) (processGroup, error)
 }
 
 type cappedProcessOutput struct {
@@ -189,7 +191,10 @@ func (o *cappedProcessOutput) Write(data []byte) (int, error) {
 	}
 	if remaining < len(data) && !o.exceeded {
 		o.exceeded = true
-		o.overflow <- o.stream
+		select {
+		case o.overflow <- o.stream:
+		default:
+		}
 	}
 	return len(data), nil
 }

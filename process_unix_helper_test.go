@@ -91,6 +91,44 @@ func TestProcessHelper(t *testing.T) {
 		if err := child.Wait(); err == nil {
 			os.Exit(3)
 		}
+	case "leader-exits-on-term", "leader-exits-descendant-holds-pipes":
+		ch := make(chan os.Signal, 1)
+		if args[0] == "leader-exits-on-term" {
+			signal.Notify(ch, syscall.SIGTERM)
+		}
+		child := exec.Command(os.Args[0], helperArgs("orphan-ignore-term", args[1])...)
+		child.Env = append(os.Environ(), processHelperEnvironment+"=1")
+		if args[0] == "leader-exits-descendant-holds-pipes" {
+			child.Stdout = os.Stdout
+			child.Stderr = os.Stderr
+		}
+		if err := child.Start(); err != nil {
+			os.Exit(2)
+		}
+		if err := notifyProcessHelper(args[1], strconv.Itoa(child.Process.Pid)); err != nil {
+			os.Exit(2)
+		}
+		if args[0] == "leader-exits-on-term" {
+			<-ch
+		}
+	case "orphan-ignore-term":
+		ignoreTERM := make(chan os.Signal, 1)
+		signal.Notify(ignoreTERM, syscall.SIGTERM)
+		if _, err := fmt.Fprint(os.Stdout, "holding stdout"); err != nil {
+			os.Exit(2)
+		}
+		if _, err := fmt.Fprint(os.Stderr, "holding stderr"); err != nil {
+			os.Exit(2)
+		}
+		if err := notifyProcessHelper(args[1], "descendant-ready"); err != nil {
+			os.Exit(2)
+		}
+		select {}
+	case "orphan-default-term":
+		if err := notifyProcessHelper(args[1], "descendant-ready"); err != nil {
+			os.Exit(2)
+		}
+		select {}
 	default:
 		os.Exit(2)
 	}

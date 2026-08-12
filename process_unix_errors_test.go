@@ -32,8 +32,11 @@ func TestExecRunnerExposesTERMGroupKILLAndDirectKillFailures(t *testing.T) {
 	<-starter.started
 	(<-clock.timers).fire()
 	<-group.signals
+	grace := <-clock.timers
+	grace.fire()
 	<-group.signals
-	<-clock.timers
+	group.changed <- struct{}{}
+	(<-clock.timers).fire()
 	starter.process.wait <- nil
 	outcome := <-done
 	if !errors.Is(outcome.err, termFailure) || !errors.Is(outcome.err, killFailure) || !errors.Is(outcome.err, directFailure) {
@@ -50,10 +53,12 @@ func TestExecRunnerClassifiesStartAndWaitFailures(t *testing.T) {
 		t.Fatalf("got %T, want start error", err)
 	}
 
-	runner2, clock, starter, _ := newFakeExecRunner()
+	runner2, clock, starter, group := newFakeExecRunner()
 	done := runFakeProcess(runner2, "/bin/true", builtInQueryLimits())
 	<-starter.started
 	<-clock.timers
+	group.alive.Store(false)
+	group.exited <- nil
 	starter.process.wait <- errors.New("wait failed")
 	outcome := <-done
 	var waitError *processWaitError
@@ -63,15 +68,16 @@ func TestExecRunnerClassifiesStartAndWaitFailures(t *testing.T) {
 }
 
 func TestExecRunnerReapsChildWhenGroupIdentityOpenFails(t *testing.T) {
-	runner, clock, starter, _ := newFakeExecRunner()
+	runner, clock, starter, group := newFakeExecRunner()
 	openFailure := errors.New("identity open failed")
-	runner.groupSignals = fakeGroupSignalFactory{err: openFailure}
+	runner.groups = fakeProcessGroupFactory{err: openFailure}
 	done := runFakeProcess(runner, "/bin/true", builtInQueryLimits())
 	<-starter.started
 	waitBound := <-clock.timers
 	if waitBound.duration != 2*time.Second {
 		t.Fatalf("wait bound got %v", waitBound.duration)
 	}
+	group.exited <- nil
 	starter.process.wait <- nil
 	outcome := <-done
 	if !errors.Is(outcome.err, openFailure) {
@@ -80,10 +86,12 @@ func TestExecRunnerReapsChildWhenGroupIdentityOpenFails(t *testing.T) {
 }
 
 func TestExecRunnerUsesFirstCoordinatorEventWithoutResampling(t *testing.T) {
-	runner, clock, starter, _ := newFakeExecRunner()
+	runner, clock, starter, group := newFakeExecRunner()
 	done := runFakeProcess(runner, "/bin/true", builtInQueryLimits())
 	invocation := <-starter.started
 	<-clock.timers
+	group.alive.Store(false)
+	group.exited <- nil
 	starter.process.wait <- nil
 	outcome := <-done
 	if _, err := invocation.stdout.Write(make([]byte, (1<<20)+1)); err != nil {
