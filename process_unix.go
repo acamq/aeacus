@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os/exec"
 	"syscall"
-	"time"
 )
 
 type execRunner struct {
@@ -16,13 +15,16 @@ type execRunner struct {
 }
 
 type activeProcess struct {
-	process   runningProcess
-	group     processGroup
-	path      string
-	limits    processLimits
-	stdout    *cappedProcessOutput
-	stderr    *cappedProcessOutput
-	waitError error
+	process       runningProcess
+	group         processGroup
+	path          string
+	limits        processLimits
+	stdout        *cappedProcessOutput
+	stderr        *cappedProcessOutput
+	waitError     error
+	cutReady      chan<- struct{}
+	releaseCut    <-chan struct{}
+	eventAdmitted chan<- processEventKind
 }
 
 func newExecRunner() execRunner {
@@ -62,12 +64,18 @@ func (r execRunner) run(path string, args []string, limits processLimits) (proce
 		alive, aliveError := active.group.Alive()
 		if aliveError != nil {
 			stopProcessTimer(timeout)
-			classification := active.reap(nil, cleanupNone, labelProcessError("check process group after leader exit", aliveError))
+			classification := r.reap(active, processReapRequest{
+				cleanup: cleanupNone,
+				cleanupError: errors.Join(
+					labelProcessError("observe leader exit", first.observationError),
+					labelProcessError("check process group after leader exit", aliveError),
+				),
+			})
 			return collectProcessResult(stdout, stderr, active.waitError), classification
 		}
 		if alive {
 			stopProcessTimer(timeout)
-			if cleanup := r.cleanup(active, nil); cleanup != nil {
+			if cleanup := r.cleanup(active, nil, labelProcessError("observe leader exit", first.observationError)); cleanup != nil {
 				return collectProcessResult(stdout, stderr, active.waitError), cleanup
 			}
 			return collectProcessResult(stdout, stderr, active.waitError), classifyProcessWait(path, active.waitError)
@@ -75,23 +83,37 @@ func (r execRunner) run(path string, args []string, limits processLimits) (proce
 	}
 	stopProcessTimer(timeout)
 	if first.primary != nil {
-		cleanup := r.cleanup(active, first.primary)
+		cleanup := r.cleanup(active, first.primary, labelProcessError("observe leader exit", first.observationError))
 		return collectProcessResult(stdout, stderr, active.waitError), cleanup
 	}
-	classification := active.reapAndClassify(first.observationError)
+	classification := r.reapAndClassify(active, first.observationError)
 	return collectProcessResult(stdout, stderr, active.waitError), classification
 }
 
 func (r execRunner) abortStart(process runningProcess, path string, limits processLimits, openError error) error {
-	killError := process.KillDirect()
+	killError := labelProcessError("kill direct child after group identity open failure", process.KillDirect())
 	waitBound := r.clock.NewTimer(limits.waitBound)
+	wait := process.Wait()
 	select {
-	case waitError := <-process.Wait():
+	case waitError := <-wait:
 		stopProcessTimer(waitBound)
-		return &processStartError{path: path, err: errors.Join(openError, killError, waitError)}
+		return &processStartError{path: path, err: errors.Join(
+			labelProcessError("open process group identity", openError), killError,
+			labelProcessError("wait for direct child after identity open failure", waitError),
+		)}
 	case <-waitBound.Chan():
-		primary := &processStartError{path: path, err: errors.Join(openError, killError)}
-		return &processWaitError{path: path, kind: waitBoundExceeded, bound: limits.waitBound, primary: primary}
+		primary := &processStartError{path: path, err: errors.Join(
+			labelProcessError("open process group identity", openError), killError,
+		)}
+		var waitError error
+		select {
+		case waitError = <-wait:
+		default:
+		}
+		return &processWaitError{
+			path: path, kind: waitBoundExceeded, bound: limits.waitBound,
+			err: waitError, primary: primary,
+		}
 	}
 }
 
@@ -101,50 +123,13 @@ type processEvent struct {
 }
 
 func (p *activeProcess) firstEvent(timeout processTimer) processEvent {
-	latch := newProcessEventLatch(p.path, p.limits)
-	for {
-		pollProcessEvents(latch, timeout.Chan(), p.stdout.overflow, p.stderr.overflow, p.group.LeaderExited())
-		if event, ready := latch.event(); ready {
-			return event
-		}
-		select {
-		case <-timeout.Chan():
-			latch.timeout()
-		case <-p.stdout.overflow:
-			latch.overflow(processStdout)
-		case <-p.stderr.overflow:
-			latch.overflow(processStderr)
-		case err := <-p.group.LeaderExited():
-			latch.leader(err)
-		}
-	}
+	return newProcessEventCoordinator(p, timeout).first(p)
 }
 
-func pollProcessEvents(
-	latch *processEventLatch,
-	timeout <-chan time.Time,
-	stdout, stderr <-chan processOutputStream,
-	leader <-chan error,
-) {
-	select {
-	case <-timeout:
-		latch.timeout()
-	default:
-	}
-	select {
-	case <-stdout:
-		latch.overflow(processStdout)
-	default:
-	}
-	select {
-	case <-stderr:
-		latch.overflow(processStderr)
-	default:
-	}
-	select {
-	case err := <-leader:
-		latch.leader(err)
-	default:
+func (p *activeProcess) waitForEventCut() {
+	if p.cutReady != nil {
+		p.cutReady <- struct{}{}
+		<-p.releaseCut
 	}
 }
 
