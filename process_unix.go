@@ -9,12 +9,14 @@ import (
 )
 
 type execRunner struct {
-	clock   processClock
-	starter processStarter
+	clock        processClock
+	starter      processStarter
+	groupSignals groupSignalFactory
 }
 
 type activeProcess struct {
 	process runningProcess
+	group   groupSignalTarget
 	path    string
 	limits  processLimits
 	stdout  *cappedProcessOutput
@@ -22,11 +24,22 @@ type activeProcess struct {
 }
 
 func newExecRunner() execRunner {
-	return execRunner{clock: realProcessClock{}, starter: osProcessStarter{}}
+	return execRunner{clock: realProcessClock{}, starter: osProcessStarter{}, groupSignals: osGroupSignalFactory{}}
 }
 
-func (r execRunner) Run(path string, args []string, profile processProfile) (processResult, error) {
-	limits := profile.Limits()
+func (r execRunner) RunBuiltIn(path string, args []string) (processResult, error) {
+	return r.run(path, args, builtInQueryLimits())
+}
+
+func (r execRunner) RunInventory(path string, args []string) (processResult, error) {
+	return r.run(path, args, pkgInventoryLimits())
+}
+
+func (r execRunner) RunTrusted(path string, args []string) (processResult, error) {
+	return r.run(path, args, trustedCommandLimits())
+}
+
+func (r execRunner) run(path string, args []string, limits processLimits) (processResult, error) {
 	stdout := newCappedProcessOutput(limits.stdoutLimit, processStdout)
 	stderr := newCappedProcessOutput(limits.stderrLimit, processStderr)
 	process, err := r.starter.Start(processInvocation{
@@ -35,106 +48,127 @@ func (r execRunner) Run(path string, args []string, profile processProfile) (pro
 	if err != nil {
 		return processResult{exitCode: -1}, &processStartError{path: path, err: err}
 	}
-	active := activeProcess{process: process, path: path, limits: limits, stdout: stdout, stderr: stderr}
+	group, err := r.groupSignals.Open(process.PID())
+	if err != nil {
+		return collectProcessResult(stdout, stderr, nil), r.abortStart(process, path, limits, err)
+	}
+	defer group.Close()
+	active := activeProcess{process: process, group: group, path: path, limits: limits, stdout: stdout, stderr: stderr}
 	timeout := r.clock.NewTimer(limits.timeout)
-	waitError, primary, waited := active.await(timeout)
+	events := active.processEvents(timeout)
+	first := <-events
 	stopProcessTimer(timeout)
-	if primary != nil {
-		if waited {
-			if err := active.process.SignalGroup(syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-				return collectProcessResult(stdout, stderr, waitError), &processWaitError{
-					path: path, kind: waitFailed, err: err, primary: primary,
+	if first.primary != nil {
+		if first.waited {
+			if err := active.group.Signal(syscall.SIGTERM); err != nil {
+				return collectProcessResult(stdout, stderr, first.waitError), &processWaitError{
+					path: path, kind: waitFailed, err: err, primary: first.primary,
 				}
 			}
-			setProcessCleanup(primary, cleanupTerminated)
-			return collectProcessResult(stdout, stderr, waitError), primary
+			setProcessCleanup(first.primary, cleanupTerminated)
+			return collectProcessResult(stdout, stderr, first.waitError), first.primary
 		}
-		cleanup := r.cleanup(active, primary)
-		return collectProcessResult(stdout, stderr, waitError), cleanup
+		cleanup := r.cleanup(active, first.primary)
+		return collectProcessResult(stdout, stderr, first.waitError), cleanup
 	}
-	result := collectProcessResult(stdout, stderr, waitError)
-	return result, classifyProcessWait(path, waitError)
+	result := collectProcessResult(stdout, stderr, first.waitError)
+	return result, classifyProcessWait(path, first.waitError)
 }
 
-func (p activeProcess) await(timeout processTimer) (error, error, bool) {
-	var waitError error
-	var primary error
-	waited := false
+func (r execRunner) abortStart(process runningProcess, path string, limits processLimits, openError error) error {
+	killError := process.KillDirect()
+	waitBound := r.clock.NewTimer(limits.waitBound)
 	select {
-	case waitError = <-p.process.Wait():
-		waited = true
-	case <-timeout.Chan():
-		primary = &processTimeoutError{path: p.path, timeout: p.limits.timeout}
-	case <-p.stdout.overflow:
-		primary = &processOverflowError{path: p.path, stream: processStdout, limit: p.limits.stdoutLimit}
-	case <-p.stderr.overflow:
-		primary = &processOverflowError{path: p.path, stream: processStderr, limit: p.limits.stderrLimit}
+	case waitError := <-process.Wait():
+		stopProcessTimer(waitBound)
+		return &processStartError{path: path, err: errors.Join(openError, killError, waitError)}
+	case <-waitBound.Chan():
+		primary := &processStartError{path: path, err: errors.Join(openError, killError)}
+		return &processWaitError{path: path, kind: waitBoundExceeded, bound: limits.waitBound, primary: primary}
 	}
-	if _, isTimeout := primary.(*processTimeoutError); !isTimeout {
+}
+
+type processEvent struct {
+	waitError error
+	primary   error
+	waited    bool
+}
+
+func (p activeProcess) processEvents(timeout processTimer) <-chan processEvent {
+	events := make(chan processEvent, 1)
+	go func() {
 		select {
+		case waitError := <-p.process.Wait():
+			events <- processEvent{waitError: waitError, waited: true}
 		case <-timeout.Chan():
-			primary = &processTimeoutError{path: p.path, timeout: p.limits.timeout}
-		default:
+			events <- processEvent{primary: &processTimeoutError{path: p.path, timeout: p.limits.timeout}}
+		case <-p.stdout.overflow:
+			events <- processEvent{primary: &processOverflowError{
+				path: p.path, stream: processStdout, limit: p.limits.stdoutLimit,
+			}}
+		case <-p.stderr.overflow:
+			events <- processEvent{primary: &processOverflowError{
+				path: p.path, stream: processStderr, limit: p.limits.stderrLimit,
+			}}
 		}
-	}
-	if _, isTimeout := primary.(*processTimeoutError); !isTimeout {
-		if p.stdout.Exceeded() {
-			primary = &processOverflowError{path: p.path, stream: processStdout, limit: p.limits.stdoutLimit}
-		} else if p.stderr.Exceeded() {
-			primary = &processOverflowError{path: p.path, stream: processStderr, limit: p.limits.stderrLimit}
-		}
-	}
-	return waitError, primary, waited
+	}()
+	return events
 }
 
 func (r execRunner) cleanup(
 	process activeProcess,
 	primary error,
 ) error {
-	termError := process.process.SignalGroup(syscall.SIGTERM)
-	if termError != nil && !errors.Is(termError, syscall.ESRCH) {
-		return r.killAndWait(process, primary)
+	termError := process.group.Signal(syscall.SIGTERM)
+	if termError != nil {
+		return r.killAndWait(process, primary, &processCause{operation: "signal process group with SIGTERM", err: termError})
 	}
 	grace := r.clock.NewTimer(process.limits.termGrace)
 	select {
 	case waitError := <-process.process.Wait():
-		stopProcessTimer(grace)
 		if !validCleanupWait(waitError) {
+			stopProcessTimer(grace)
 			return &processWaitError{path: process.path, kind: waitFailed, err: waitError, primary: primary}
 		}
+		stopProcessTimer(grace)
 		setProcessCleanup(primary, cleanupTerminated)
 		return primary
 	case <-grace.Chan():
 	}
-	return r.killAndWait(process, primary)
+	return r.killAndWait(process, primary, nil)
 }
 
 func (r execRunner) killAndWait(
 	process activeProcess,
 	primary error,
+	termError error,
 ) error {
-	killError := process.process.SignalGroup(syscall.SIGKILL)
-	if errors.Is(killError, syscall.ESRCH) {
-		killError = nil
-	} else if killError != nil {
+	killError := process.group.Signal(syscall.SIGKILL)
+	if killError != nil {
 		directError := process.process.KillDirect()
-		killError = errors.Join(killError, directError)
+		killError = &processCause{operation: "signal process group with SIGKILL", err: killError}
+		if directError != nil {
+			killError = errors.Join(killError, &processCause{operation: "kill direct child", err: directError})
+		}
 	}
+	cleanupError := errors.Join(termError, killError)
 	waitBound := r.clock.NewTimer(process.limits.waitBound)
 	select {
 	case waitError := <-process.process.Wait():
-		stopProcessTimer(waitBound)
-		if killError != nil {
-			return &processWaitError{path: process.path, kind: waitFailed, err: killError, primary: primary}
+		if cleanupError != nil {
+			stopProcessTimer(waitBound)
+			return &processWaitError{path: process.path, kind: waitFailed, err: cleanupError, primary: primary}
 		}
 		if !validCleanupWait(waitError) {
+			stopProcessTimer(waitBound)
 			return &processWaitError{path: process.path, kind: waitFailed, err: waitError, primary: primary}
 		}
+		stopProcessTimer(waitBound)
 		setProcessCleanup(primary, cleanupKilled)
 		return primary
 	case <-waitBound.Chan():
 		return &processWaitError{
-			path: process.path, kind: waitBoundExceeded, bound: process.limits.waitBound, err: killError, primary: primary,
+			path: process.path, kind: waitBoundExceeded, bound: process.limits.waitBound, err: cleanupError, primary: primary,
 		}
 	}
 }

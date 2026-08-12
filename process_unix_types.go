@@ -11,35 +11,6 @@ import (
 	"time"
 )
 
-type processProfile uint8
-
-const (
-	builtInQuery processProfile = iota
-	pkgInventory
-	trustedCommand
-)
-
-type processLimits struct {
-	timeout     time.Duration
-	stdoutLimit int
-	stderrLimit int
-	termGrace   time.Duration
-	waitBound   time.Duration
-}
-
-func (p processProfile) Limits() processLimits {
-	switch p {
-	case builtInQuery:
-		return processLimits{10 * time.Second, 1 << 20, 1 << 20, 2 * time.Second, 2 * time.Second}
-	case pkgInventory:
-		return processLimits{30 * time.Second, 16 << 20, 1 << 20, 2 * time.Second, 2 * time.Second}
-	case trustedCommand:
-		return processLimits{30 * time.Second, 1 << 20, 1 << 20, 2 * time.Second, 2 * time.Second}
-	default:
-		return processLimits{}
-	}
-}
-
 type processCleanup uint8
 
 const (
@@ -74,6 +45,14 @@ type processResult struct {
 	stderr   []byte
 	exitCode int
 }
+
+type processCause struct {
+	operation string
+	err       error
+}
+
+func (e *processCause) Error() string { return fmt.Sprintf("%s: %v", e.operation, e.err) }
+func (e *processCause) Unwrap() error { return e.err }
 
 type processStartError struct {
 	path string
@@ -137,11 +116,15 @@ func (e *processWaitError) Error() string {
 	return fmt.Sprintf("wait for %s: %v", e.path, e.err)
 }
 
-func (e *processWaitError) Unwrap() error {
+func (e *processWaitError) Unwrap() []error {
+	causes := make([]error, 0, 2)
 	if e.primary != nil {
-		return e.primary
+		causes = append(causes, e.primary)
 	}
-	return e.err
+	if e.err != nil {
+		causes = append(causes, e.err)
+	}
+	return causes
 }
 
 type processTimer interface {
@@ -162,14 +145,23 @@ type processInvocation struct {
 }
 
 type runningProcess interface {
+	PID() int
 	Wait() <-chan error
-	SignalGroup(syscall.Signal) error
 	KillDirect() error
-	GroupAlive() (bool, error)
 }
 
 type processStarter interface {
 	Start(processInvocation) (runningProcess, error)
+}
+
+// The target must retain process identity independently of numeric PID reuse.
+type groupSignalTarget interface {
+	Signal(syscall.Signal) error
+	Close()
+}
+
+type groupSignalFactory interface {
+	Open(int) (groupSignalTarget, error)
 }
 
 type cappedProcessOutput struct {
