@@ -1,26 +1,59 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	"github.com/fatih/color"
 )
 
-// confirm will prompt the user with the given toPrint string, and
-// exit the program if N or n is input.
-func confirm(p ...interface{}) {
-	if yesEnabled {
-		return
+var errInvalidReleaseConfirmation = errors.New("invalid release confirmation")
+
+func confirm(p ...interface{}) (bool, error) {
+	return readReleaseConfirmation(os.Stdin, os.Stdout, fmt.Sprint(p...), yesEnabled)
+}
+
+func readReleaseConfirmation(input io.Reader, output io.Writer, prompt string, automatic bool) (bool, error) {
+	if automatic {
+		return true, nil
 	}
-	toPrint := fmt.Sprint(p...)
-	toPrint = printer(color.FgYellow, "CONF", toPrint)
-	fmt.Print(toPrint + " [Y/n]: ")
-	var resp string
-	fmt.Scanln(&resp)
-	if strings.ToLower(strings.TrimSpace(resp)) == "n" {
-		os.Exit(1)
+	if _, err := fmt.Fprint(output, printer(color.FgYellow, "CONF", prompt)+" [Y/n]: "); err != nil {
+		return false, fmt.Errorf("write confirmation prompt: %w", err)
+	}
+	response, err := readReleaseResponse(input)
+	if err != nil {
+		return false, fmt.Errorf("read confirmation: %w", err)
+	}
+	switch strings.ToLower(strings.TrimSpace(response)) {
+	case "", "y", "yes":
+		return true, nil
+	case "n", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("confirmation response %q: %w", strings.TrimSpace(response), errInvalidReleaseConfirmation)
+	}
+}
+
+func readReleaseResponse(input io.Reader) (string, error) {
+	var response strings.Builder
+	buffer := make([]byte, 1)
+	for {
+		read, err := input.Read(buffer)
+		if read == 1 {
+			if buffer[0] == '\n' {
+				return response.String(), nil
+			}
+			response.WriteByte(buffer[0])
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) && response.Len() > 0 {
+				return response.String(), nil
+			}
+			return "", err
+		}
 	}
 }
 

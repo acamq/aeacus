@@ -101,8 +101,7 @@ func main() {
 					if err := readConfig(); err != nil {
 						return err
 					}
-					genReadMe()
-					return nil
+					return genReadMe()
 				},
 			},
 			{
@@ -114,8 +113,7 @@ func main() {
 					if err := readConfig(); err != nil {
 						return err
 					}
-					writeConfig()
-					return nil
+					return writeConfig()
 				},
 			},
 			{
@@ -147,14 +145,7 @@ func main() {
 					return nil
 				},
 			},
-			{
-				Name:    "release",
-				Aliases: []string{"r"},
-				Usage:   "Prepare the image for release",
-				Action: func(c *cli.Context) error {
-					return releaseImage()
-				},
-			},
+			newReleaseCommand(releaseImage),
 		},
 	}
 
@@ -169,18 +160,42 @@ func main() {
 // writing the ReadMe/Desktop Files, installing the system service,
 // and cleaning the image for release.
 func releaseImage() error {
-	if err := readConfig(); err != nil {
-		return err
+	initialConfirmation := func() error {
+		confirmed, err := confirm("Are you sure you want to begin the image release process?")
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			return errReleaseDeclined
+		}
+		return nil
 	}
-	permsCheck()
-	confirm("Are you sure you want to begin the image release process?")
-	writeConfig()
-	genReadMe()
-	writeDesktopFiles()
-	configureAutologin()
-	installFont()
-	installService()
-	confirm("Everything is done except cleanup. Are you sure you want to continue, and remove your scoring configuration and other aeacus files?")
-	cleanUp()
-	return nil
+	return runReleasePipeline(releaseStages{
+		steps: []releaseStep{
+			{stage: releaseStageConfig, run: readConfig},
+			{stage: releaseStagePermissions, run: checkReleasePermissions},
+			{stage: releaseStageInitialConfirmation, run: initialConfirmation},
+			{stage: releaseStageEncryption, run: writeConfig},
+			{stage: releaseStageReadMe, run: genReadMe},
+			{stage: releaseStageDesktop, run: writeDesktopFiles},
+			{stage: releaseStageAutologin, run: configureAutologin},
+			{stage: releaseStageFont, run: installFont},
+			{stage: releaseStageService, run: installService},
+		},
+		confirmCleanup: func() (bool, error) {
+			return confirm("Everything is done except cleanup. Are you sure you want to continue, and remove your scoring configuration and other aeacus files?")
+		},
+		cleanup: cleanUp,
+	})
+}
+
+func newReleaseCommand(run func() error) *cli.Command {
+	return &cli.Command{
+		Name:    "release",
+		Aliases: []string{"r"},
+		Usage:   "Prepare the image for release",
+		Action: func(c *cli.Context) error {
+			return run()
+		},
+	}
 }

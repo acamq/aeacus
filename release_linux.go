@@ -1,118 +1,173 @@
 package main
 
+import (
+	"errors"
+	"fmt"
+)
+
 // writeDesktopFiles creates TeamID.txt and its shortcut, as well as links
 // to the ScoringReport, ReadMe, and other needed files.
-func writeDesktopFiles() {
+func writeDesktopFiles() error {
 	info("Creating or emptying TeamID.txt...")
-	shellCommand("echo 'YOUR-TEAMID-HERE' > " + dirPath + "TeamID.txt")
-	shellCommand("chmod 666 " + dirPath + "TeamID.txt")
-	shellCommand("chown " + conf.User + ":" + conf.User + " " + dirPath + "TeamID.txt")
+	if err := runReleaseCommands(
+		"echo 'YOUR-TEAMID-HERE' > "+dirPath+"TeamID.txt",
+		"chmod 666 "+dirPath+"TeamID.txt",
+		"chown "+conf.User+":"+conf.User+" "+dirPath+"TeamID.txt",
+	); err != nil {
+		return err
+	}
 	info("Writing shortcuts to Desktop...")
-	shellCommand("mkdir -p /home/" + conf.User + "/Desktop/")
-	shellCommand("cp " + dirPath + "misc/desktop/*.desktop /home/" + conf.User + "/Desktop/")
-	shellCommand("chmod +x /home/" + conf.User + "/Desktop/*.desktop")
-	shellCommand("chown " + conf.User + ":" + conf.User + " /home/" + conf.User + "/Desktop/*")
+	return runReleaseCommands(
+		"mkdir -p /home/"+conf.User+"/Desktop/",
+		"cp "+dirPath+"misc/desktop/*.desktop /home/"+conf.User+"/Desktop/",
+		"chmod +x /home/"+conf.User+"/Desktop/*.desktop",
+		"chown "+conf.User+":"+conf.User+" /home/"+conf.User+"/Desktop/*",
+	)
 }
 
 // configureAutologin configures the auto-login capability for LightDM and
 // GDM3, so that the image automatically logs in to the main user's account
 // on boot.
-func configureAutologin() {
-	lightdm, _ := cond{Path: "/usr/share/lightdm"}.PathExists()
-	gdm, _ := cond{Path: "/etc/gdm3/"}.PathExists()
+func configureAutologin() error {
+	lightdm, err := cond{Path: "/usr/share/lightdm"}.PathExists()
+	if err != nil {
+		return fmt.Errorf("detect LightDM: %w", err)
+	}
+	gdm, err := cond{Path: "/etc/gdm3/"}.PathExists()
+	if err != nil {
+		return fmt.Errorf("detect GDM3: %w", err)
+	}
 	if lightdm {
 		info("LightDM detected for autologin.")
-		shellCommand(`echo "autologin-user=` + conf.User + `" >> /usr/share/lightdm/lightdm.conf.d/50-ubuntu.conf`)
+		return runReleaseCommands(`echo "autologin-user=` + conf.User + `" >> /usr/share/lightdm/lightdm.conf.d/50-ubuntu.conf`)
 	} else if gdm {
 		info("GDM3 detected for autologin.")
-		shellCommand(`echo -e "AutomaticLoginEnable=True\nAutomaticLogin=` + conf.User + `" >> /etc/gdm3/daemon.conf`)
-	} else {
-		fail("Unable to configure autologin! Please do so manually.")
+		return runReleaseCommands(`echo -e "AutomaticLoginEnable=True\nAutomaticLogin=` + conf.User + `" >> /etc/gdm3/daemon.conf`)
 	}
+	return errors.New("supported display manager not found")
 }
 
 // installFont is skipped for Linux.
-func installFont() {
+func installFont() error {
 	info("Skipping font install for Linux...")
+	return nil
 }
 
 // installService for Linux installs and starts the CSSClient init.d service.
-func installService() {
+func installService() error {
 	info("Installing service...")
-	shellCommand("cp " + dirPath + "misc/dev/CSSClient /etc/init.d/")
-	shellCommand("chmod +x /etc/init.d/CSSClient")
-	shellCommand("systemctl enable CSSClient")
-	shellCommand("systemctl start CSSClient")
+	return runReleaseCommands(
+		"cp "+dirPath+"misc/dev/CSSClient /etc/init.d/",
+		"chmod +x /etc/init.d/CSSClient",
+		"systemctl enable CSSClient",
+		"systemctl start CSSClient",
+	)
 }
 
 // cleanUp for Linux is primarily focused on removing cached files, history,
 // and other pieces of forensic evidence. It also removes the non-required
 // files in the aeacus directory.
-func cleanUp() {
+func cleanUp() error {
 	findPaths := "/bin /etc /home /opt /root /sbin /srv /usr /mnt /var"
 
 	info("Changing perms to 755 in " + dirPath + "...")
-	shellCommand("chmod 755 -R " + dirPath)
+	if err := runReleaseCommands("chmod 755 -R " + dirPath); err != nil {
+		return err
+	}
 
 	info("Removing aeacus binary...")
-	shellCommand("rm " + dirPath + "aeacus")
+	if err := runReleaseCommands("rm " + dirPath + "aeacus"); err != nil {
+		return err
+	}
 
 	info("Removing scoring.conf...")
-	shellCommand("rm " + dirPath + "scoring.conf*")
+	if err := runReleaseCommands("rm " + dirPath + "scoring.conf*"); err != nil {
+		return err
+	}
 
 	info("Removing other setup files...")
-	shellCommand("rm -rf " + dirPath + "misc/")
-	shellCommand("find " + dirPath + " -name '[R|r]*.conf' -type f -delete")
-	shellCommand("rm -rf " + dirPath + "README.md")
-	shellCommand("rm -rf " + dirPath + ".git")
-	shellCommand("rm -rf " + dirPath + ".github")
-	shellCommand("rm -rf " + dirPath + "*.go")
-	shellCommand("rm -rf " + dirPath + "Makefile")
-	shellCommand("rm -rf " + dirPath + "go.*")
-	shellCommand("rm -rf " + dirPath + "*.exe")
-	shellCommand("rm -rf " + dirPath + "docs")
+	if err := runReleaseCommands(
+		"rm -rf "+dirPath+"misc/",
+		"find "+dirPath+" -name '[R|r]*.conf' -type f -delete",
+		"rm -rf "+dirPath+"README.md",
+		"rm -rf "+dirPath+".git",
+		"rm -rf "+dirPath+".github",
+		"rm -rf "+dirPath+"*.go",
+		"rm -rf "+dirPath+"Makefile",
+		"rm -rf "+dirPath+"go.*",
+		"rm -rf "+dirPath+"*.exe",
+		"rm -rf "+dirPath+"docs",
+	); err != nil {
+		return err
+	}
 
 	if !ask("Do you want to remove cache and log files, overwrite timestamps, and remove other forensic data from this machine? This may impact data used for your forensic questions!") {
-		return
+		return nil
 	}
 
 	info("Removing .viminfo and .swp files...")
-	shellCommand("find " + findPaths + " -iname '*.viminfo*' -delete -iname '*.swp' -delete")
+	if err := runReleaseCommands("find " + findPaths + " -iname '*.viminfo*' -delete -iname '*.swp' -delete"); err != nil {
+		return err
+	}
 
 	info("Symlinking .bash_history and .zsh_history to /dev/null...")
-	shellCommand(`find ` + findPaths + ` -iname '*.bash_history' -exec ln -sf /dev/null {} \;`)
-	shellCommand(`find ` + findPaths + ` -name '.zsh_history' -exec ln -sf /dev/null {} \;`)
+	if err := runReleaseCommands(
+		`find `+findPaths+` -iname '*.bash_history' -exec ln -sf /dev/null {} \;`,
+		`find `+findPaths+` -name '.zsh_history' -exec ln -sf /dev/null {} \;`,
+	); err != nil {
+		return err
+	}
 
 	info("Removing .mysql_history...")
-	shellCommand(`find ` + findPaths + ` -name '.mysql_history' -exec rm {} \;`)
+	if err := runReleaseCommands(`find ` + findPaths + ` -name '.mysql_history' -exec rm {} \;`); err != nil {
+		return err
+	}
 
 	info("Removing .local files...")
-	shellCommand("rm -rf /root/.local /home/*/.local/")
+	if err := runReleaseCommands("rm -rf /root/.local /home/*/.local/"); err != nil {
+		return err
+	}
 
 	info("Removing cache...")
-	shellCommand("rm -rf /root/.cache /home/*/.cache/")
+	if err := runReleaseCommands("rm -rf /root/.cache /home/*/.cache/"); err != nil {
+		return err
+	}
 
 	info("Removing temp root and Desktop files...")
-	shellCommand("rm -rf /root/*~ /home/*/Desktop/*~")
+	if err := runReleaseCommands("rm -rf /root/*~ /home/*/Desktop/*~"); err != nil {
+		return err
+	}
 
 	info("Removing crash and VMWare data...")
-	shellCommand("rm -f /var/VMwareDnD/* /var/crash/*.crash")
+	if err := runReleaseCommands("rm -f /var/VMwareDnD/* /var/crash/*.crash"); err != nil {
+		return err
+	}
 
 	info("Removing apt and dpkg logs...")
-	shellCommand("rm -rf /var/log/apt/* /var/log/dpkg.log")
+	if err := runReleaseCommands("rm -rf /var/log/apt/* /var/log/dpkg.log"); err != nil {
+		return err
+	}
 
 	info("Removing logs (auth and syslog)...")
-	shellCommand("rm -f /var/log/auth.log* /var/log/syslog*")
+	if err := runReleaseCommands("rm -f /var/log/auth.log* /var/log/syslog*"); err != nil {
+		return err
+	}
 
 	info("Removing initial package list...")
-	shellCommand("rm -f /var/log/installer/initial-status.gz")
+	if err := runReleaseCommands("rm -f /var/log/installer/initial-status.gz"); err != nil {
+		return err
+	}
 
 	info("Installing BleachBit...")
-	shellCommand("apt-get install -y bleachbit")
+	if err := runReleaseCommands("apt-get install -y bleachbit"); err != nil {
+		return err
+	}
 
 	info("Clearing Firefox cache and browsing history...")
-	shellCommand("bleachbit --clean firefox.url_history; bleachbit --clean firefox.cache")
+	if err := runReleaseCommands("bleachbit --clean firefox.url_history; bleachbit --clean firefox.cache"); err != nil {
+		return err
+	}
 
 	info("Overwriting timestamps to obfuscate changes...")
-	shellCommand(`find /etc /home /var -exec touch --date='2012-12-12 12:12' {} \; 2>/dev/null`)
+	return runReleaseCommands(`find /etc /home /var -exec touch --date='2012-12-12 12:12' {} \; 2>/dev/null`)
 }

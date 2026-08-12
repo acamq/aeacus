@@ -1,33 +1,44 @@
 package main
 
 // writeDesktopFiles writes default scoring engine files to the desktop.
-func writeDesktopFiles() {
+func writeDesktopFiles() error {
 	firefoxBinary := `C:\Program Files\Mozilla Firefox\firefox.exe`
 	info("Writing ScoringReport.html shortcut to Desktop...")
 	cmdString := `$WshShell = New-Object -comObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut("C:\Users\` + conf.User + `\Desktop\ScoringReport.lnk"); $Shortcut.TargetPath = "` + firefoxBinary + `"; $Shortcut.Arguments = "C:\aeacus\assets\ScoringReport.html"; $Shortcut.Save()`
-	shellCommand(cmdString)
+	if err := runReleaseCommands(cmdString); err != nil {
+		return err
+	}
 	info("Writing ReadMe.html shortcut to Desktop...")
 	cmdString = `$WshShell = New-Object -comObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut("C:\Users\` + conf.User + `\Desktop\ReadMe.lnk"); $Shortcut.TargetPath = "` + firefoxBinary + `"; $Shortcut.Arguments = "C:\aeacus\assets\ReadMe.html"; $Shortcut.Save()`
-	shellCommand(cmdString)
+	if err := runReleaseCommands(cmdString); err != nil {
+		return err
+	}
 	info("Creating or emptying TeamID.txt file...")
 	cmdString = "echo 'YOUR-TEAMID-HERE' > C:\\aeacus\\TeamID.txt"
-	shellCommand(cmdString)
+	if err := runReleaseCommands(cmdString); err != nil {
+		return err
+	}
 	info("Changing Permissions of TeamID...")
 	powershellPermission := `
 	$ACL = Get-ACL C:\aeacus\TeamID.txt
 	$ACL.SetOwner([System.Security.Principal.NTAccount] $env:USERNAME)
 	Set-Acl -Path C:\aeacus\TeamID.txt -AclObject $ACL
 	`
-	shellCommand(powershellPermission)
+	if err := runReleaseCommands(powershellPermission); err != nil {
+		return err
+	}
 	info("Writing TeamID shortcut to Desktop...")
 	cmdString = `$WshShell = New-Object -comObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut("C:\Users\` + conf.User + `\Desktop\TeamID.lnk"); $Shortcut.TargetPath = "C:\aeacus\phocus.exe"; $Shortcut.Arguments = "-i yes"; $Shortcut.Save()`
-	shellCommand(cmdString)
+	if err := runReleaseCommands(cmdString); err != nil {
+		return err
+	}
 
 	// domain compatibility? doubt
+	return nil
 }
 
 // configureAutologin allows the current user to log in automatically.
-func configureAutologin() {
+func configureAutologin() error {
 	info("Setting Up autologin for " + conf.User + "...")
 	powershellAutoLogin := `
 	function Test-RegistryValue {
@@ -70,11 +81,11 @@ func configureAutologin() {
 		Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -name "AutoAdminLogon" -Value 1 -type String
 	}
 	`
-	shellCommand(powershellAutoLogin)
+	return runReleaseCommands(powershellAutoLogin)
 }
 
 // installFont installs the Raleway font for ID Prompt.
-func installFont() {
+func installFont() error {
 	info("Installing Raleway font for ID Prompt...")
 	powershellFontInstall := `
 	$SourceDir   = "C:\aeacus\assets\fonts\Raleway"
@@ -103,17 +114,21 @@ func installFont() {
 		}
 	}
 	`
-	shellCommand(powershellFontInstall)
+	return runReleaseCommands(powershellFontInstall)
 }
 
 // installService installs the Aeacus service on Windows.
-func installService() {
+func installService() error {
 	info("Installing service with sc.exe...")
 	cmdString := `sc.exe create CSSClient binPath= "C:\aeacus\phocus.exe" start= "auto" DisplayName= "CSSClient"`
-	shellCommand(cmdString)
+	if err := runReleaseCommands(cmdString); err != nil {
+		return err
+	}
 	info("Setting service description...")
 	cmdString = `sc.exe description CSSClient "This is Aeacus's Competition Scoring System client. Don't stop or mess with this unless you want to not get points, and maybe have your registry deleted."`
-	shellCommand(cmdString)
+	if err := runReleaseCommands(cmdString); err != nil {
+		return err
+	}
 	info("Setting up TeamID scheduled task...")
 	idTaskCreate := `
 	$action = New-ScheduledTaskAction -Execute "C:\aeacus\phocus.exe" -Argument "-i yes"
@@ -127,32 +142,42 @@ func installService() {
 	$principal = New-ScheduledTaskPrincipal -GroupId "BUILTIN\Administrators" -RunLevel Highest
 	Register-ScheduledTask -TaskName "CSSClient" -Description "Scheduled Task to ensure the CSSClient service remains up" -Action $action -Trigger $trigger -Principal $principal
 	`
-	shellCommand(idTaskCreate)
-	shellCommand(serviceTaskCreate)
+	if err := runReleaseCommands(idTaskCreate, serviceTaskCreate); err != nil {
+		return err
+	}
 
 	addExclusions := `
 	Add-MpPreference -ExclusionPath "C:\aeacus\phocus.exe"
  	Add-MpPreference -ExclusionPath "C:\aeacus\"
   	`
-	shellCommand(addExclusions)
- 
+	return runReleaseCommands(addExclusions)
 }
 
 // cleanUp clears out sensitive files left behind by image developers or the
 // scoring engine.
-func cleanUp() {
+func cleanUp() error {
 	info("Removing scoring.conf and ReadMe.conf...")
-	shellCommand("Remove-Item -Force C:\\aeacus\\scoring.conf")
-	shellCommand("Remove-Item -Path 'C:\\aeacus\\[R|r]*.conf' -Force")
+	if err := runReleaseCommands(
+		"Remove-Item -Force C:\\aeacus\\scoring.conf",
+		"Remove-Item -Path 'C:\\aeacus\\[R|r]*.conf' -Force",
+	); err != nil {
+		return err
+	}
 	info("Removing previous.txt...")
-	shellCommand("Remove-Item -Force C:\\aeacus\\previous.txt")
+	if err := runReleaseCommands("Remove-Item -Force C:\\aeacus\\previous.txt"); err != nil {
+		return err
+	}
 	if !ask("Do you want to remove cache and history files from this machine?") {
-		return
+		return nil
 	}
 	info("Emptying recycle bin...")
-	shellCommand("Clear-RecycleBin -Force")
+	if err := runReleaseCommands("Clear-RecycleBin -Force"); err != nil {
+		return err
+	}
 	info("Clearing recently used...")
-	shellCommand("Remove-Item -Force '${env:USERPROFILE}\\AppData\\Roaming\\Microsoft\\Windows\\Recent‌​*.lnk'")
+	if err := runReleaseCommands("Remove-Item -Force '${env:USERPROFILE}\\AppData\\Roaming\\Microsoft\\Windows\\Recent‌​*.lnk'"); err != nil {
+		return err
+	}
 	info("Clearing run.exe command history...")
 	clearRunScript := `$path = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU"
 	$arr = (Get-Item -Path $path).Property
@@ -163,8 +188,13 @@ func cleanUp() {
 		 Remove-ItemProperty -Path $path -Name $item -ErrorAction SilentlyContinue
 	   }
 	}`
-	shellCommand(clearRunScript)
+	if err := runReleaseCommands(clearRunScript); err != nil {
+		return err
+	}
 	info("Removing Command History for Powershell")
-	shellCommand("Remove-Item (Get-PSReadlineOption).HistorySavePath")
+	if err := runReleaseCommands("Remove-Item (Get-PSReadlineOption).HistorySavePath"); err != nil {
+		return err
+	}
 	warn("Done with automatic cleanup! You need to remove aeacus.exe manually. The only things you need in the C:\\aeacus directory is phocus, scoring.dat, TeamID.txt, and the assets directory.")
+	return nil
 }
