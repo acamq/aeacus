@@ -7,7 +7,6 @@ import (
 	"errors"
 	"sync/atomic"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -35,7 +34,7 @@ func (osProcessGroupFactory) Open(pid int) (processGroup, error) {
 		unix.Close(kqueue)
 		return nil, err
 	}
-	group := &freeBSDProcessGroup{pid: pid, kqueue: kqueue, exited: make(chan error, 1)}
+	group := &freeBSDProcessGroup{pid: pid, kqueue: kqueue, exited: make(chan error, 1), changed: make(chan struct{})}
 	go group.observeLeader()
 	return group, nil
 }
@@ -44,16 +43,13 @@ type freeBSDProcessGroup struct {
 	pid          int
 	kqueue       int
 	exited       chan error
+	changed      chan struct{}
 	leaderExited atomic.Bool
 }
 
 func (g *freeBSDProcessGroup) LeaderExited() <-chan error { return g.exited }
-func (g *freeBSDProcessGroup) Changed() <-chan struct{} {
-	changed := make(chan struct{}, 1)
-	time.AfterFunc(time.Millisecond, func() { changed <- struct{}{} })
-	return changed
-}
-func (g *freeBSDProcessGroup) Close() { unix.Close(g.kqueue) }
+func (g *freeBSDProcessGroup) Changed() <-chan struct{}   { return g.changed }
+func (g *freeBSDProcessGroup) Close()                     { unix.Close(g.kqueue) }
 
 func (g *freeBSDProcessGroup) observeLeader() {
 	events := make([]unix.Kevent_t, 1)

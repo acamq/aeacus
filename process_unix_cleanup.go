@@ -11,27 +11,35 @@ import (
 func (r execRunner) cleanup(process *activeProcess, primary error) error {
 	termError := process.group.Signal(syscall.SIGTERM)
 	grace := r.clock.NewTimer(process.limits.termGrace)
-	<-grace.Chan()
-	alive, aliveError := process.group.Alive()
-	if aliveError != nil || alive {
-		return r.killAndReap(process, primary, errors.Join(
-			labelProcessError("check process group after SIGTERM", aliveError),
-			labelProcessError("signal process group with SIGTERM", termError),
-		))
+	for {
+		alive, aliveError := process.group.Alive()
+		if aliveError != nil {
+			stopProcessTimer(grace)
+			return r.killAndReap(process, primary, errors.Join(
+				labelProcessError("check process group after SIGTERM", aliveError),
+				labelProcessError("signal process group with SIGTERM", termError),
+			))
+		}
+		if !alive {
+			stopProcessTimer(grace)
+			return process.reap(primary, cleanupTerminated, labelProcessError("signal process group with SIGTERM", termError))
+		}
+		select {
+		case <-grace.Chan():
+			return r.killAndReap(process, primary, labelProcessError("signal process group with SIGTERM", termError))
+		case <-process.group.Changed():
+		}
 	}
-	return process.reap(primary, cleanupTerminated, labelProcessError("signal process group with SIGTERM", termError))
 }
 
 func (r execRunner) killAndReap(process *activeProcess, primary error, cleanupError error) error {
 	killError := process.group.Signal(syscall.SIGKILL)
-	directError := process.process.KillDirect()
 	if killError != nil {
 		killError = errors.Join(
 			labelProcessError("signal process group with SIGKILL", killError),
-			labelProcessError("kill direct child", directError),
+			labelProcessError("kill direct child", process.process.KillDirect()),
 		)
 	}
-	_ = directError
 	wait := process.process.Wait()
 	waitBound := r.clock.NewTimer(process.limits.waitBound)
 	for {

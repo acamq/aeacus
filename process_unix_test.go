@@ -266,6 +266,7 @@ func TestExecRunnerWaitsForLeaderReapAfterGroupCleanup(t *testing.T) {
 	group.exited <- nil
 	grace := <-clock.timers
 	group.alive.Store(false)
+	group.changed <- struct{}{}
 	grace.fire()
 	starter.process.wait <- nil
 	outcome := <-done
@@ -284,6 +285,7 @@ func TestExecRunnerUsesPreopenedGroupTargetAfterLeaderWait(t *testing.T) {
 	group.exited <- nil
 	grace := <-clock.timers
 	group.alive.Store(false)
+	group.changed <- struct{}{}
 	grace.fire()
 	starter.process.wait <- nil
 	<-done
