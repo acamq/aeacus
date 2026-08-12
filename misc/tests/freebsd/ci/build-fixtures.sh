@@ -25,7 +25,7 @@ mkdir -p "$packages" "$distfiles" "$localbase"
 roots="x11-wm/xfce4 x11/lightdm x11/lightdm-gtk-greeter devel/xdg-utils"
 for origin in $roots; do
     make -C "$work/ports/$origin" all-depends-list PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles" WRKDIRPREFIX="$work/wrk" INSTALL_AS_USER=yes
-done | tail -r | awk '!seen[$0]++' > "$work/dependencies"
+done | tail -r > "$work/dependencies"
 : > "$work/staged-packages"
 while IFS= read -r dependency; do
     [ -n "$dependency" ] || continue

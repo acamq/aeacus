@@ -40,7 +40,8 @@ def test_static_boundaries() -> None:
     assert 'PREFIX=/usr/local' in fixtures
     assert 'PATH="$localbase/bin:$localbase/sbin:$PATH"' in fixtures
     assert "package-noinstall" in fixtures and "all-depends-list" in fixtures
-    assert "tail -r" in fixtures
+    assert 'done | tail -r > "$work/dependencies"' in fixtures
+    assert "awk '!seen[$0]++'" not in fixtures
     assert 'PKG_CONFIG_SYSROOT_DIR="$sysroot"' in fixtures
     assert 'tar -xf "$package_file" -C "$sysroot" --exclude +COMPACT_MANIFEST --exclude +MANIFEST' in fixtures
     assert 'CC="cc -I$localbase/include -L$localbase/lib"' in fixtures
