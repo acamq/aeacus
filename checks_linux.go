@@ -2,9 +2,6 @@ package main
 
 import (
 	"errors"
-	"os"
-	"os/user"
-	"strconv"
 	"strings"
 	"syscall"
 )
@@ -125,70 +122,12 @@ func (c cond) PasswordChanged() (bool, error) {
 
 func (c cond) FileOwner() (bool, error) {
 	c.requireArgs("Path", "Name")
-	u, err := user.Lookup(c.Name)
-	if err != nil {
-		return false, err
-	}
-
-	f, err := os.Stat(c.Path)
-	if err != nil {
-		return false, err
-	}
-
-	uid := f.Sys().(*syscall.Stat_t).Uid
-	o, err := strconv.ParseUint(u.Uid, 10, 32)
-	if err != nil {
-		return false, err
-	}
-	debug("File owner for", c.Path, "uid is", strconv.FormatUint(uint64(uid), 10))
-	return uint32(o) == uid, nil
+	return unixFileOwner(c.Path, c.Name, "")
 }
 
 func (c cond) PermissionIs() (bool, error) {
 	c.requireArgs("Path", "Value")
-	f, err := os.Stat(c.Path)
-	if err != nil {
-		return false, err
-	}
-
-	fileMode := f.Mode()
-	modeBytes := []byte(fileMode.String())
-	if len(modeBytes) != 10 {
-		fail("System permission string is wrong length:", string(modeBytes))
-		return false, errors.New("Invalid system permission string")
-	}
-
-	// Permission string includes suid/sgid as the special bit (MSB), while
-	// GNU coreutils replaces the executable bit, which we need to emulate.
-	if fileMode&os.ModeSetuid != 0 {
-		modeBytes[0] = '-'
-		modeBytes[3] = 's'
-	}
-	if fileMode&os.ModeSetgid != 0 {
-		modeBytes[0] = '-'
-		modeBytes[6] = 's'
-	}
-
-	c.Value = strings.TrimSpace(c.Value)
-
-	if len(c.Value) == 9 {
-		// If we're provided a mode string of only 9 characters, we'll assume
-		// that the 0th bit is irrelevant and should be a wildcard
-		c.Value = "?" + c.Value
-	} else if len(c.Value) != 10 {
-		fail("Your permission string is the wrong length (should be 9 or 10 characters):", c.Value)
-		return false, errors.New("Invalid user permission string")
-	}
-
-	for i := 0; i < len(c.Value); i++ {
-		if c.Value[i] == '?' {
-			continue
-		}
-		if c.Value[i] != modeBytes[i] {
-			return false, nil
-		}
-	}
-	return true, nil
+	return unixPermissionIs(c.Path, c.Value)
 }
 
 func (c cond) UserExists() (bool, error) {
