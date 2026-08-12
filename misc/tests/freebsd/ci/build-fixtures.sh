@@ -13,6 +13,7 @@ mkdir -p "$out/sources" "$work"
 
 case "$SOURCE_DATE_EPOCH" in *[!0-9]*|'') exit 1 ;; esac
 export SOURCE_DATE_EPOCH BATCH=yes DISABLE_VULNERABILITIES=yes PACKAGE_BUILDING=yes
+export NO_DEPENDS=yes
 
 cp sources/ports.tar "$out/sources/ports.tar"
 misc/tests/freebsd/ci/extract-source.sh sources/ports.tar "$work/ports"

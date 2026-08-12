@@ -35,6 +35,7 @@ def test_static_boundaries() -> None:
     assert "/usr/ports" not in fixtures
     assert "PACKAGES=" in fixtures and "PORTSDIR=" in fixtures and "DISTDIR=" in fixtures
     assert "artifact_arch=$ARCH" in fixtures and "unset ARCH" in fixtures
+    assert "NO_DEPENDS=yes" in fixtures
 
 
 def test_discovery_never_reads_sensitive_content() -> None:

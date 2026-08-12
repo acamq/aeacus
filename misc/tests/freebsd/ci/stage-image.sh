@@ -19,7 +19,7 @@ sha256=$(printf '%s\n' "$row" | cut -f6)
 
 mkdir -p "$stage"
 image="$stage/$filename"
-curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output "$image" "$url"
+curl --fail --location --proto '=https' --tlsv1.2 --retry 8 --retry-all-errors --retry-delay 5 --output "$image" "$url"
 [ "$(stat -c %s "$image")" = "$bytes" ]
 printf '%s  %s\n' "$sha256" "$image" | sha256sum --check --strict
 
