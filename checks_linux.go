@@ -193,18 +193,10 @@ func (c cond) PermissionIs() (bool, error) {
 
 func (c cond) UserExists() (bool, error) {
 	c.requireArgs("User")
-	return cond{
-		Path:  "/etc/passwd",
-		Value: "^" + c.User + ":",
-		regex: true,
-	}.FileContains()
+	return (unixIdentityDatabase{reader: unixIdentityFiles}).UserExists(c.User)
 }
 
 func (c cond) UserInGroup() (bool, error) {
 	c.requireArgs("User", "Group")
-	return cond{
-		Path:  "/etc/group",
-		Value: c.Group + `[0-9a-zA-Z,:\s+]+` + c.User,
-		regex: true,
-	}.FileContains()
+	return (unixIdentityDatabase{reader: unixIdentityFiles}).UserInGroup(c.User, c.Group)
 }
