@@ -39,12 +39,14 @@ def test_static_boundaries() -> None:
     assert "INSTALL_AS_USER=yes" in fixtures
     assert 'PREFIX=/usr/local' in fixtures
     assert 'PATH="$localbase/bin:$localbase/sbin:$PATH"' in fixtures
-    assert "package-noinstall" in fixtures and "all-depends-list" in fixtures
-    assert 'done | tail -r > "$work/dependencies"' in fixtures
-    assert "awk '!seen[$0]++'" not in fixtures
+    assert "package-noinstall" in fixtures
+    assert "stage_dependency()" in fixtures
+    assert "build-depends-list" in fixtures and "run-depends-list" in fixtures
+    assert "all-depends-list" not in fixtures and "tail -r" not in fixtures
     assert 'PKG_CONFIG_SYSROOT_DIR="$sysroot"' in fixtures
     assert 'tar -xf "$package_file" -C "$sysroot" --exclude +COMPACT_MANIFEST --exclude +MANIFEST' in fixtures
     assert 'CC="cc -I$localbase/include -L$localbase/lib"' in fixtures
+    assert fixtures.index('export PATH="$localbase/bin:$localbase/sbin:$PATH"') < fixtures.index("stage_dependency()")
 
 
 def test_discovery_never_reads_sensitive_content() -> None:

@@ -23,22 +23,27 @@ sysroot="$work/sysroot"
 localbase="$sysroot/usr/local"
 mkdir -p "$packages" "$distfiles" "$localbase"
 roots="x11-wm/xfce4 x11/lightdm x11/lightdm-gtk-greeter devel/xdg-utils"
-for origin in $roots; do
-    make -C "$work/ports/$origin" all-depends-list PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles" WRKDIRPREFIX="$work/wrk" INSTALL_AS_USER=yes
-done | tail -r > "$work/dependencies"
 : > "$work/staged-packages"
-while IFS= read -r dependency; do
-    [ -n "$dependency" ] || continue
-    make -C "$dependency" package-noinstall PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles" WRKDIRPREFIX="$work/wrk" LOCALBASE="$localbase" PREFIX=/usr/local INSTALL_AS_USER=yes NO_DEPENDS=yes CC="cc -I$localbase/include -L$localbase/lib" CXX="c++ -I$localbase/include -L$localbase/lib"
-    package_file=$(make -C "$dependency" -V PKGFILE PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles" WRKDIRPREFIX="$work/wrk" LOCALBASE="$localbase" PREFIX=/usr/local INSTALL_AS_USER=yes)
-    case "$(cat "$work/staged-packages")" in
-        *"|$package_file|"*) ;;
-        *) tar -xf "$package_file" -C "$sysroot" --exclude +COMPACT_MANIFEST --exclude +MANIFEST; printf '|%s|\n' "$package_file" >> "$work/staged-packages" ;;
-    esac
-done < "$work/dependencies"
 export PATH="$localbase/bin:$localbase/sbin:$PATH"
 export PKG_CONFIG_SYSROOT_DIR="$sysroot"
 export PKG_CONFIG_LIBDIR="$localbase/libdata/pkgconfig:$localbase/lib/pkgconfig:$localbase/share/pkgconfig"
+stage_dependency() (
+    dependency=$1
+    [ -n "$dependency" ] || return
+    case "$(cat "$work/staged-packages")" in *"|$dependency|"*) return ;; esac
+    printf '|%s|\n' "$dependency" >> "$work/staged-packages"
+    for child in $(make -C "$dependency" build-depends-list run-depends-list PORTSDIR="$work/ports" LOCALBASE="$localbase"); do
+        stage_dependency "$child"
+    done
+    make -C "$dependency" package-noinstall PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles" WRKDIRPREFIX="$work/wrk" LOCALBASE="$localbase" PREFIX=/usr/local INSTALL_AS_USER=yes NO_DEPENDS=yes CC="cc -I$localbase/include -L$localbase/lib" CXX="c++ -I$localbase/include -L$localbase/lib"
+    package_file=$(make -C "$dependency" -V PKGFILE PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles" WRKDIRPREFIX="$work/wrk" LOCALBASE="$localbase" PREFIX=/usr/local INSTALL_AS_USER=yes)
+    tar -xf "$package_file" -C "$sysroot" --exclude +COMPACT_MANIFEST --exclude +MANIFEST
+)
+for origin in $roots; do
+    for dependency in $(make -C "$work/ports/$origin" build-depends-list run-depends-list PORTSDIR="$work/ports" LOCALBASE="$localbase"); do
+        stage_dependency "$dependency"
+    done
+done
 for origin in $roots; do
     make -C "$work/ports/$origin" package-noinstall PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles" WRKDIRPREFIX="$work/wrk" LOCALBASE="$localbase" PREFIX=/usr/local INSTALL_AS_USER=yes NO_DEPENDS=yes CC="cc -I$localbase/include -L$localbase/lib" CXX="c++ -I$localbase/include -L$localbase/lib"
 done
