@@ -140,7 +140,7 @@ func testLeaderExitWithLiveDescendant(t *testing.T, mode string) {
 	default:
 	}
 	grace.fire()
-	if waitBound := <-clock.timers; waitBound.duration != 2*time.Second {
+	if waitBound := requireFakeTimerDuration(t, clock, 2*time.Second, "real process final wait"); waitBound.duration != 2*time.Second {
 		t.Fatalf("wait bound got %v", waitBound.duration)
 	}
 	outcome := <-done
@@ -180,7 +180,7 @@ func testExitedLeaderWithPipeHoldingDescendant(t *testing.T) {
 	default:
 	}
 	grace.fire()
-	waitBound := <-clock.timers
+	waitBound := requireFakeTimerDuration(t, clock, 2*time.Second, "WaitDelay final wait")
 	if waitBound.duration != 2*time.Second {
 		t.Fatalf("wait bound got %v", waitBound.duration)
 	}
