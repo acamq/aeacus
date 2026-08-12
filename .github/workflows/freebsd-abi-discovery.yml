@@ -1,0 +1,110 @@
+name: freebsd-abi-discovery
+run-name: abi-${{ github.sha }}-${{ github.run_attempt }}
+
+on:
+  push:
+    branches:
+      - integrate/freebsd-support
+
+permissions:
+  contents: read
+
+concurrency:
+  group: freebsd-abi-${{ github.sha }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - release: '14.4'
+            arch: arm64
+            image_bytes: '345243648'
+            image_sha256: 78fa20cab5254755357f2ee71196138db23ce1a95674c9f34beed44dee1391a6
+          - release: '14.4'
+            arch: x86-64
+            image_bytes: '377154048'
+            image_sha256: a124dfec63f9a00b6f90f13d96a40f124b33bd8a92f38391efd33270bd7000c3
+          - release: '15.1'
+            arch: arm64
+            image_bytes: '358350848'
+            image_sha256: 5dee8bedce8b1b3a53776f8f60d875b0dd0d696e1258ffcf696885b0dec39118
+          - release: '15.1'
+            arch: x86-64
+            image_bytes: '390723584'
+            image_sha256: d7045aa82b38f43af0ab778c6a89725703f5223d04a1d7c3b52bf66b88f164fb
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Stage locked image
+        run: misc/tests/freebsd/ci/stage-image.sh '${{ matrix.release }}' '${{ matrix.arch }}' ".stage/abi-${{ matrix.release }}-${{ matrix.arch }}"
+      - name: Verify staged immutable image identity
+        env:
+          EXPECTED_BYTES: '${{ matrix.image_bytes }}'
+          EXPECTED_SHA256: '${{ matrix.image_sha256 }}'
+        run: |
+          [ "$(stat -c %s "$IMAGE_PATH")" = "$EXPECTED_BYTES" ]
+          printf '%s  %s\n' "$EXPECTED_SHA256" "$IMAGE_PATH" | sha256sum --check --strict
+      - name: Start locked FreeBSD
+        uses: cross-platform-actions/action@5ea7e8e4677bd726033a10b094ba1c5762b15dee
+        with:
+          operating_system: freebsd
+          version: '${{ matrix.release }}'
+          architecture: '${{ matrix.arch }}'
+          image_url: '${{ env.IMAGE_URL }}'
+          sync_files: 'true'
+          memory: 6G
+          cpu_count: 2
+      - name: Discover native ABI and metadata
+        shell: cpa.sh {0} --environment-variables RELEASE ARCH
+        env:
+          RELEASE: '${{ matrix.release }}'
+          ARCH: '${{ matrix.arch }}'
+        run: misc/tests/freebsd/ci/discover.sh
+      - name: Synchronize discovery bytes from VM
+        run: cpa.sh --sync-files vm-to-runner
+      - name: Stop image server
+        if: always()
+        run: misc/tests/freebsd/ci/stop-image.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: abi-row-${{ matrix.release }}-${{ matrix.arch }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: out/abi/${{ matrix.release }}/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+  aggregate:
+    needs: discover
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: abi-row-*-${{ github.sha }}-${{ github.run_attempt }}
+          path: rows
+          merge-multiple: false
+      - name: Aggregate strict discovery schemas
+        run: |
+          mkdir input
+          for row in rows/*; do
+            release=$(basename "$row" | cut -d- -f3)
+            arch=$(basename "$row" | cut -d- -f4)
+            mkdir -p "input/$release/$arch"
+            cp -R "$row"/. "input/$release/$arch/"
+          done
+          python3 misc/tests/freebsd/aggregate_discovery.py input artifact
+          python3 misc/tests/freebsd/validate.py abi artifact/kinfo-layouts.json
+          python3 misc/tests/freebsd/validate.py metadata artifact/base-metadata.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: freebsd-abi-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifact
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0

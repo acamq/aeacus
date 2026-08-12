@@ -1,0 +1,6 @@
+# aeacus-freebsd-images-v1
+release	arch	filename	url	bytes	sha256
+14.4	arm64	freebsd-14.4-arm64.qcow2	https://github.com/cross-platform-actions/freebsd-builder/releases/download/v0.15.0/freebsd-14.4-arm64.qcow2	345243648	78fa20cab5254755357f2ee71196138db23ce1a95674c9f34beed44dee1391a6
+14.4	x86-64	freebsd-14.4-x86-64.qcow2	https://github.com/cross-platform-actions/freebsd-builder/releases/download/v0.15.0/freebsd-14.4-x86-64.qcow2	377154048	a124dfec63f9a00b6f90f13d96a40f124b33bd8a92f38391efd33270bd7000c3
+15.1	arm64	freebsd-15.1-arm64.qcow2	https://github.com/cross-platform-actions/freebsd-builder/releases/download/v0.15.0/freebsd-15.1-arm64.qcow2	358350848	5dee8bedce8b1b3a53776f8f60d875b0dd0d696e1258ffcf696885b0dec39118
+15.1	x86-64	freebsd-15.1-x86-64.qcow2	https://github.com/cross-platform-actions/freebsd-builder/releases/download/v0.15.0/freebsd-15.1-x86-64.qcow2	390723584	d7045aa82b38f43af0ab778c6a89725703f5223d04a1d7c3b52bf66b88f164fb
