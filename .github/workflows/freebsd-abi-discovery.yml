@@ -100,9 +100,9 @@ jobs:
             mkdir -p "input/$release/$arch"
             cp -R "$row"/. "input/$release/$arch/"
           done
-          python3 misc/tests/freebsd/aggregate_discovery.py input artifact
-          python3 misc/tests/freebsd/validate.py abi artifact/kinfo-layouts.json
-          python3 misc/tests/freebsd/validate.py metadata artifact/base-metadata.json
+          python3 -m misc.tests.freebsd.aggregate_discovery input artifact
+          python3 -m misc.tests.freebsd.validate abi artifact/kinfo-layouts.json
+          python3 -m misc.tests.freebsd.validate metadata artifact/base-metadata.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: freebsd-abi-${{ github.sha }}-${{ github.run_attempt }}

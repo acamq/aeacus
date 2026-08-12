@@ -152,6 +152,14 @@ def test_guest_shell_uses_base_tools() -> None:
         assert forbidden.search(executable_text) is None, f"non-base guest command in {script.name}"
 
 
+def test_host_python_runs_as_modules() -> None:
+    for workflow_name in ("freebsd-abi-discovery.yml", "freebsd-fixture-build.yml"):
+        workflow = (ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+        for line in workflow.splitlines():
+            if "python3 " in line:
+                assert "python3 -m misc.tests.freebsd." in line, line
+
+
 def test_awk_variables_avoid_builtin_names() -> None:
     builtins = ("index", "length", "split", "substr", "match", "sub", "gsub", "sprintf")
     for script in sorted((FREEBSD / "ci").glob("*.sh")):
@@ -169,6 +177,7 @@ def main() -> int:
     test_archive_members_are_safe()
     test_archive_filter_executes()
     test_guest_shell_uses_base_tools()
+    test_host_python_runs_as_modules()
     test_awk_variables_avoid_builtin_names()
     print("Task 10 repair boundaries: PASS")
     return 0

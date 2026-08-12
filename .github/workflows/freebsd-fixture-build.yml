@@ -145,8 +145,8 @@ jobs:
             mkdir -p "input/$release/$arch"
             cp -R "$row"/. "input/$release/$arch/"
           done
-          python3 misc/tests/freebsd/aggregate_fixtures.py input artifact
-          python3 misc/tests/freebsd/validate.py fixture artifact
+          python3 -m misc.tests.freebsd.aggregate_fixtures input artifact
+          python3 -m misc.tests.freebsd.validate fixture artifact
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: fixture-build-${{ github.sha }}-${{ github.run_attempt }}

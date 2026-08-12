@@ -22,16 +22,13 @@ case "$1" in
         stat -f '%N\t%HT\t%u\t%g\t%Mp%Lp\t%l\t%z' /etc/master.passwd >/dev/null
         ;;
     fixtures)
-        printf 'safe/path\n' | awk '
-        {
-            count = split($0, parts, "/")
-            for (part_number = 1; part_number <= count; part_number++) {
-                if (parts[part_number] == ".." || parts[part_number] == "") exit 1
-            }
-        }'
         workspace="/tmp/aeacus-native-smoke-$$"
         trap 'rm -rf "$workspace"' EXIT INT TERM
-        mkdir "$workspace"
+        mkdir "$workspace" "$workspace/source"
+        printf fixture > "$workspace/source/safe"
+        tar -cf "$workspace/safe.tar" -C "$workspace/source" safe
+        misc/tests/freebsd/ci/extract-source.sh "$workspace/safe.tar" "$workspace/output"
+        [ "$(cat "$workspace/output/safe")" = fixture ]
         [ -w "$workspace" ]
         ;;
     *) exit 2 ;;
