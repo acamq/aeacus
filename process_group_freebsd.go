@@ -5,8 +5,10 @@ package main
 import (
 	"encoding/binary"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -34,8 +36,9 @@ func (osProcessGroupFactory) Open(pid int) (processGroup, error) {
 		unix.Close(kqueue)
 		return nil, err
 	}
-	group := &freeBSDProcessGroup{pid: pid, kqueue: kqueue, exited: make(chan error, 1), changed: make(chan struct{})}
+	group := &freeBSDProcessGroup{pid: pid, kqueue: kqueue, exited: make(chan error, 1), changed: make(chan struct{}, 1), stop: make(chan struct{})}
 	go group.observeLeader()
+	go group.observeGroup()
 	return group, nil
 }
 
@@ -44,12 +47,19 @@ type freeBSDProcessGroup struct {
 	kqueue       int
 	exited       chan error
 	changed      chan struct{}
+	stop         chan struct{}
 	leaderExited atomic.Bool
+	close        sync.Once
 }
 
 func (g *freeBSDProcessGroup) LeaderExited() <-chan error { return g.exited }
 func (g *freeBSDProcessGroup) Changed() <-chan struct{}   { return g.changed }
-func (g *freeBSDProcessGroup) Close()                     { unix.Close(g.kqueue) }
+func (g *freeBSDProcessGroup) Close() {
+	g.close.Do(func() {
+		close(g.stop)
+		unix.Close(g.kqueue)
+	})
+}
 
 func (g *freeBSDProcessGroup) observeLeader() {
 	events := make([]unix.Kevent_t, 1)
@@ -58,6 +68,25 @@ func (g *freeBSDProcessGroup) observeLeader() {
 		g.leaderExited.Store(true)
 	}
 	g.exited <- err
+}
+
+func (g *freeBSDProcessGroup) observeGroup() {
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			alive, err := g.Alive()
+			if err != nil || !alive {
+				select {
+				case g.changed <- struct{}{}:
+				default:
+				}
+			}
+		case <-g.stop:
+			return
+		}
+	}
 }
 
 func (g *freeBSDProcessGroup) Signal(signal syscall.Signal) error {
