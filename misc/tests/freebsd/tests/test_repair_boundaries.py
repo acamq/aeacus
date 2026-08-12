@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 import subprocess
@@ -26,8 +27,10 @@ FIXTURES: Final = FREEBSD / "ci/build-fixtures.sh"
 def test_static_boundaries() -> None:
     discovery = DISCOVER.read_text(encoding="utf-8")
     fixtures = FIXTURES.read_text(encoding="utf-8")
-    assert "/etc/master.passwd" not in discovery
-    assert 'policy=$(python3 misc/tests/freebsd/metadata_policy.py "$path")' in discovery
+    assert discovery.count("/etc/master.passwd") == 1
+    assert "python" not in discovery and "uv " not in discovery
+    assert 'case "$path" in' in discovery
+    assert '/etc/master.passwd) policy=stat-only ;;' in discovery
     assert 'if [ "$policy" = stat-only ]' in discovery
     assert "/usr/ports" not in fixtures
     assert "PACKAGES=" in fixtures and "PORTSDIR=" in fixtures and "DISTDIR=" in fixtures
@@ -43,22 +46,15 @@ def test_discovery_never_reads_sensitive_content() -> None:
         fake_sha.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$SHA_LOG\"\nprintf '%064d\\n' 0\n", encoding="ascii")
         fake_sha.chmod(0o755)
         env = os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}", "SHA_LOG": str(log)}
-        classifier = FREEBSD / "metadata_policy.py"
-        subprocess.run(["python3", str(classifier), "/etc/master.passwd"], cwd=ROOT, env=env, check=True, capture_output=True)
+        discovery = DISCOVER.read_text(encoding="utf-8")
+        assert not re.search(r"sha256[^\n]*master\.passwd", discovery)
         assert not log.exists(), "sensitive metadata path reached sha256"
-
-
-def test_unknown_stat_only_path_rejected() -> None:
-    result = subprocess.run(
-        ["python3", str(FREEBSD / "metadata_policy.py"), "/etc/passwd", "stat-only"],
-        cwd=ROOT, check=False, capture_output=True, text=True,
-    )
-    assert result.returncode != 0
 
 
 def test_metadata_schema_policy() -> None:
     from misc.tests.freebsd.validate_metadata import validate_path
-    sensitive = {"path": "/etc/master.passwd", "present": True, "type": "Regular File", "uid": 0, "gid": 0, "mode": "0600", "nlink": 1, "bytes": 1, "content_hash_policy": "stat-only"}
+    from misc.tests.freebsd.json_contract import JsonObject
+    sensitive: JsonObject = {"path": "/etc/master.passwd", "present": True, "type": "Regular File", "uid": 0, "gid": 0, "mode": "0600", "nlink": 1, "bytes": 1, "content_hash_policy": "stat-only"}
     assert validate_path(sensitive) == "/etc/master.passwd"
     for damaged in (
         sensitive | {"content_hash_policy": "sha256"},
@@ -133,14 +129,47 @@ def test_archive_members_are_safe() -> None:
         assert not safe(name)
 
 
+def test_archive_filter_executes() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        source = root / "source"
+        source.mkdir()
+        (source / "safe").write_text("fixture", encoding="ascii")
+        archive = root / "safe.tar"
+        subprocess.run(["tar", "-cf", archive, "safe"], cwd=source, check=True)
+        result = subprocess.run(["sh", str(FREEBSD / "ci/extract-source.sh"), str(archive), str(root / "output")], check=False, capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert (root / "output/safe").read_text(encoding="ascii") == "fixture"
+
+
+def test_guest_shell_uses_base_tools() -> None:
+    forbidden = re.compile(r"\b(?:python3?|uv|gawk|bash|sha256sum)\b")
+    for script in sorted((FREEBSD / "ci").glob("*.sh")):
+        if script.name in {"stage-image.sh", "stop-image.sh"}:
+            continue
+        text = script.read_text(encoding="utf-8")
+        executable_text = "\n".join(line for line in text.splitlines() if "command -v python" not in line)
+        assert forbidden.search(executable_text) is None, f"non-base guest command in {script.name}"
+
+
+def test_awk_variables_avoid_builtin_names() -> None:
+    builtins = ("index", "length", "split", "substr", "match", "sub", "gsub", "sprintf")
+    for script in sorted((FREEBSD / "ci").glob("*.sh")):
+        text = script.read_text(encoding="utf-8")
+        for name in builtins:
+            assert re.search(rf"\b{name}\s*=", text) is None, f"awk built-in assigned in {script.name}: {name}"
+
+
 def main() -> int:
     test_static_boundaries()
     test_discovery_never_reads_sensitive_content()
-    test_unknown_stat_only_path_rejected()
     test_metadata_schema_policy()
     test_discovery_driver_sensitive_and_unreadable_boundaries()
     test_fixture_driver_uses_only_writable_outputs()
     test_archive_members_are_safe()
+    test_archive_filter_executes()
+    test_guest_shell_uses_base_tools()
+    test_awk_variables_avoid_builtin_names()
     print("Task 10 repair boundaries: PASS")
     return 0
 

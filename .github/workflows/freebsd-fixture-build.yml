@@ -105,7 +105,9 @@ jobs:
           RELEASE: '${{ matrix.release }}'
           ARCH: '${{ matrix.arch }}'
           SOURCE_DATE_EPOCH: '${{ env.SOURCE_DATE_EPOCH }}'
-        run: misc/tests/freebsd/ci/build-fixtures.sh
+        run: |
+          misc/tests/freebsd/ci/native-smoke.sh fixtures
+          misc/tests/freebsd/ci/build-fixtures.sh
       - name: Synchronize fixture bytes from VM
         run: cpa.sh --sync-files vm-to-runner
       - name: Stop image server

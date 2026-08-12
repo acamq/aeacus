@@ -18,7 +18,10 @@ while IFS= read -r path; do
     [ -n "$path" ] || continue
     if [ -e "$path" ] || [ -L "$path" ]; then
         stat -f '%N\t%HT\t%u\t%g\t%Mp%Lp\t%l\t%z' "$path"
-        policy=$(python3 misc/tests/freebsd/metadata_policy.py "$path")
+        case "$path" in
+            /etc/master.passwd) policy=stat-only ;;
+            *) policy=sha256 ;;
+        esac
         if [ "$policy" = stat-only ]; then
             [ -f "$path" ]
             printf '%s\n' stat-only

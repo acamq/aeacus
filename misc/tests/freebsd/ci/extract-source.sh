@@ -13,8 +13,8 @@ BEGIN { failed = 0 }
 /^\// { failed = 1 }
 {
     count = split($0, parts, "/")
-    for (index = 1; index <= count; index++) {
-        if (parts[index] == ".." || parts[index] == "") failed = 1
+    for (part_number = 1; part_number <= count; part_number++) {
+        if (parts[part_number] == ".." || parts[part_number] == "") failed = 1
     }
 }
 END { exit failed }

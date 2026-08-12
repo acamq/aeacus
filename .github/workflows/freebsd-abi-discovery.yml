@@ -64,7 +64,9 @@ jobs:
         env:
           RELEASE: '${{ matrix.release }}'
           ARCH: '${{ matrix.arch }}'
-        run: misc/tests/freebsd/ci/discover.sh
+        run: |
+          misc/tests/freebsd/ci/native-smoke.sh discovery
+          misc/tests/freebsd/ci/discover.sh
       - name: Synchronize discovery bytes from VM
         run: cpa.sh --sync-files vm-to-runner
       - name: Stop image server
