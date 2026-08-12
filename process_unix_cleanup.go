@@ -6,28 +6,46 @@ import (
 	"errors"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
-func (r execRunner) cleanup(process *activeProcess, primary error) error {
-	termError := process.group.Signal(syscall.SIGTERM)
+const unixGroupPollInterval = 10 * time.Millisecond
+
+type processReapRequest struct {
+	primary      error
+	cleanup      processCleanup
+	cleanupError error
+	bound        processTimer
+}
+
+func (r execRunner) cleanup(process *activeProcess, primary error, priorError error) error {
+	termError := labelProcessError("signal process group with SIGTERM", process.group.Signal(syscall.SIGTERM))
 	grace := r.clock.NewTimer(process.limits.termGrace)
+	cleanupError := errors.Join(priorError, termError)
 	for {
+		if processTimerFired(grace) {
+			return r.killAndReap(process, primary, cleanupError)
+		}
 		alive, aliveError := process.group.Alive()
 		if aliveError != nil {
 			stopProcessTimer(grace)
 			return r.killAndReap(process, primary, errors.Join(
+				cleanupError,
 				labelProcessError("check process group after SIGTERM", aliveError),
-				labelProcessError("signal process group with SIGTERM", termError),
 			))
 		}
 		if !alive {
 			stopProcessTimer(grace)
-			return process.reap(primary, cleanupTerminated, labelProcessError("signal process group with SIGTERM", termError))
+			return r.reap(process, processReapRequest{
+				primary: primary, cleanup: cleanupTerminated, cleanupError: cleanupError,
+			})
 		}
+		poll := r.clock.NewTimer(unixGroupPollInterval)
 		select {
 		case <-grace.Chan():
-			return r.killAndReap(process, primary, labelProcessError("signal process group with SIGTERM", termError))
-		case <-process.group.Changed():
+			stopProcessTimer(poll)
+			return r.killAndReap(process, primary, cleanupError)
+		case <-poll.Chan():
 		}
 	}
 }
@@ -37,63 +55,125 @@ func (r execRunner) killAndReap(process *activeProcess, primary error, cleanupEr
 	if killError != nil {
 		killError = errors.Join(
 			labelProcessError("signal process group with SIGKILL", killError),
-			labelProcessError("kill direct child", process.process.KillDirect()),
+			labelProcessError("kill direct child after group SIGKILL failure", process.process.KillDirect()),
 		)
 	}
-	wait := process.process.Wait()
-	waitBound := r.clock.NewTimer(process.limits.waitBound)
+	request := processReapRequest{
+		primary: primary, cleanup: cleanupKilled,
+		cleanupError: errors.Join(cleanupError, killError),
+		bound:        r.clock.NewTimer(process.limits.waitBound),
+	}
 	for {
+		if processTimerFired(request.bound) {
+			return process.reapExpired(request)
+		}
 		alive, aliveError := process.group.Alive()
 		if aliveError != nil {
-			stopProcessTimer(waitBound)
-			return process.reapFrom(wait, primary, cleanupNone, errors.Join(
-				cleanupError,
-				killError,
+			request.cleanup = cleanupNone
+			request.cleanupError = errors.Join(
+				request.cleanupError,
 				labelProcessError("check process group after SIGKILL", aliveError),
-			))
+			)
+			return r.reap(process, request)
 		}
 		if !alive {
-			stopProcessTimer(waitBound)
-			return process.reapFrom(wait, primary, cleanupKilled, errors.Join(cleanupError, killError))
+			return process.reapWithin(request)
 		}
+		poll := r.clock.NewTimer(unixGroupPollInterval)
 		select {
-		case <-waitBound.Chan():
-			return process.reapBounded(wait, primary, errors.Join(cleanupError, killError))
-		case <-process.group.Changed():
+		case <-request.bound.Chan():
+			stopProcessTimer(poll)
+			return process.reapExpired(request)
+		case <-poll.Chan():
 		}
 	}
 }
 
-func (p *activeProcess) reap(primary error, cleanup processCleanup, cleanupError error) error {
-	return p.reapFrom(p.process.Wait(), primary, cleanup, cleanupError)
-}
-
-func (p *activeProcess) reapFrom(wait <-chan error, primary error, cleanup processCleanup, cleanupError error) error {
-	waitError := <-wait
-	p.waitError = waitError
-	if cleanupError != nil || primary != nil && !validCleanupWait(waitError) {
-		return &processWaitError{path: p.path, kind: waitFailed, err: errors.Join(cleanupError, waitError), primary: primary}
+func (r execRunner) reap(process *activeProcess, request processReapRequest) error {
+	if request.bound == nil {
+		request.bound = r.clock.NewTimer(process.limits.waitBound)
 	}
-	setProcessCleanup(primary, cleanup)
-	return primary
+	return process.reapWithin(request)
 }
 
-func (p *activeProcess) reapBounded(wait <-chan error, primary error, cleanupError error) error {
+func (p *activeProcess) reapWithin(request processReapRequest) error {
+	wait := p.process.Wait()
 	select {
 	case waitError := <-wait:
-		p.waitError = waitError
-	default:
+		stopProcessTimer(request.bound)
+		return p.finishReap(waitError, request)
+	case <-request.bound.Chan():
+		return p.reapExpiredFrom(wait, request)
 	}
-	return &processWaitError{path: p.path, kind: waitBoundExceeded, bound: p.limits.waitBound, err: cleanupError, primary: primary}
 }
 
-func (p *activeProcess) reapAndClassify(observationError error) error {
-	waitError := <-p.process.Wait()
-	p.waitError = waitError
-	if observationError != nil {
-		return &processWaitError{path: p.path, kind: waitFailed, err: observationError}
+func (p *activeProcess) reapExpired(request processReapRequest) error {
+	return p.reapExpiredFrom(p.process.Wait(), request)
+}
+
+func (p *activeProcess) reapExpiredFrom(wait <-chan error, request processReapRequest) error {
+	select {
+	case p.waitError = <-wait:
+		request.cleanupError = errors.Join(
+			request.cleanupError,
+			labelProcessError("wait for direct child at final deadline", p.waitError),
+		)
+	default:
 	}
-	return classifyProcessWait(p.path, waitError)
+	return &processWaitError{
+		path: p.path, kind: waitBoundExceeded, bound: p.limits.waitBound,
+		err: request.cleanupError, primary: request.primary,
+	}
+}
+
+func (p *activeProcess) finishReap(waitError error, request processReapRequest) error {
+	p.waitError = waitError
+	if request.cleanupError != nil || request.primary != nil && !validCleanupWait(waitError) {
+		return &processWaitError{
+			path: p.path, kind: waitFailed,
+			err: errors.Join(
+				request.cleanupError,
+				labelProcessError("wait for direct child", waitError),
+			),
+			primary: request.primary,
+		}
+	}
+	setProcessCleanup(request.primary, request.cleanup)
+	return request.primary
+}
+
+func (r execRunner) reapAndClassify(process *activeProcess, observationError error) error {
+	request := processReapRequest{
+		cleanupError: labelProcessError("observe leader exit", observationError),
+		bound:        r.clock.NewTimer(process.limits.waitBound),
+	}
+	wait := process.process.Wait()
+	select {
+	case waitError := <-wait:
+		stopProcessTimer(request.bound)
+		process.waitError = waitError
+		if request.cleanupError != nil {
+			return &processWaitError{
+				path: process.path, kind: waitFailed,
+				err: errors.Join(
+					request.cleanupError,
+					labelProcessError("wait for direct child", waitError),
+				),
+			}
+		}
+		return classifyProcessWait(process.path, waitError)
+	case <-request.bound.Chan():
+		return process.reapExpiredFrom(wait, request)
+	}
+}
+
+func processTimerFired(timer processTimer) bool {
+	select {
+	case <-timer.Chan():
+		return true
+	default:
+		return false
+	}
 }
 
 func labelProcessError(operation string, err error) error {

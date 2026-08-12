@@ -14,11 +14,16 @@ import (
 type fakeProcessTimer struct {
 	duration time.Duration
 	ch       chan time.Time
+	stopped  atomic.Bool
 }
 
 func (t *fakeProcessTimer) Chan() <-chan time.Time { return t.ch }
-func (t *fakeProcessTimer) Stop() bool             { return true }
-func (t *fakeProcessTimer) fire()                  { t.ch <- time.Unix(0, 0) }
+func (t *fakeProcessTimer) Stop() bool             { return !t.stopped.Swap(true) }
+func (t *fakeProcessTimer) fire() {
+	if !t.stopped.Load() {
+		t.ch <- time.Unix(0, 0)
+	}
+}
 
 type fakeProcessClock struct {
 	timers chan *fakeProcessTimer
@@ -37,37 +42,61 @@ func (c *fakeProcessClock) NewTimer(duration time.Duration) processTimer {
 	return timer
 }
 
+func (c *fakeProcessClock) assertNoActiveTimer(t *testing.T, duration time.Duration) {
+	t.Helper()
+	for {
+		select {
+		case timer := <-c.timers:
+			if timer.duration == duration && !timer.stopped.Load() {
+				t.Fatalf("active timer remains at %v", duration)
+			}
+		default:
+			return
+		}
+	}
+}
+
 type fakeRunningProcess struct {
 	wait            chan error
 	directKillError error
+	directKillCalls atomic.Int32
+	waitCalls       atomic.Int32
+	waitCalled      chan struct{}
 }
 
 func newFakeRunningProcess() *fakeRunningProcess {
 	return &fakeRunningProcess{
-		wait: make(chan error, 1),
+		wait: make(chan error, 1), waitCalled: make(chan struct{}, 1),
 	}
 }
 
-func (p *fakeRunningProcess) PID() int           { return 42 }
-func (p *fakeRunningProcess) Wait() <-chan error { return p.wait }
-func (p *fakeRunningProcess) KillDirect() error  { return p.directKillError }
+func (p *fakeRunningProcess) PID() int { return 42 }
+func (p *fakeRunningProcess) Wait() <-chan error {
+	p.waitCalls.Add(1)
+	select {
+	case p.waitCalled <- struct{}{}:
+	default:
+	}
+	return p.wait
+}
+func (p *fakeRunningProcess) KillDirect() error {
+	p.directKillCalls.Add(1)
+	return p.directKillError
+}
 
 type fakeProcessGroup struct {
 	signals chan syscall.Signal
 	errors  []error
 	exited  chan error
-	changed chan struct{}
 	alive   atomic.Bool
+	aliveAt func(int32) (bool, error)
+	checks  atomic.Int32
 }
 
 func (g *fakeProcessGroup) Signal(signal syscall.Signal) error {
 	g.signals <- signal
 	if signal == syscall.SIGKILL {
 		g.alive.Store(false)
-		select {
-		case g.changed <- struct{}{}:
-		default:
-		}
 	}
 	if len(g.errors) == 0 {
 		return nil
@@ -78,9 +107,14 @@ func (g *fakeProcessGroup) Signal(signal syscall.Signal) error {
 }
 
 func (g *fakeProcessGroup) LeaderExited() <-chan error { return g.exited }
-func (g *fakeProcessGroup) Changed() <-chan struct{}   { return g.changed }
-func (g *fakeProcessGroup) Alive() (bool, error)       { return g.alive.Load(), nil }
-func (g *fakeProcessGroup) Close()                     {}
+func (g *fakeProcessGroup) Alive() (bool, error) {
+	check := g.checks.Add(1)
+	if g.aliveAt != nil {
+		return g.aliveAt(check)
+	}
+	return g.alive.Load(), nil
+}
+func (g *fakeProcessGroup) Close() {}
 
 type fakeProcessGroupFactory struct {
 	target *fakeProcessGroup
@@ -129,7 +163,7 @@ func newFakeExecRunner() (execRunner, *fakeProcessClock, *fakeProcessStarter, *f
 		started: make(chan processInvocation, 1),
 	}
 	target := &fakeProcessGroup{
-		signals: make(chan syscall.Signal, 2), exited: make(chan error, 1), changed: make(chan struct{}, 2),
+		signals: make(chan syscall.Signal, 2), exited: make(chan error, 1),
 	}
 	target.alive.Store(true)
 	return execRunner{clock: clock, starter: starter, groups: fakeProcessGroupFactory{target: target}}, clock, starter, target
@@ -197,15 +231,17 @@ func TestExecRunnerEscalatesAndBoundsWaitAtExactFakeClockBoundaries(t *testing.T
 	if signal := <-group.signals; signal != syscall.SIGKILL {
 		t.Fatalf("second signal got %v", signal)
 	}
-	waitBound := <-clock.timers
+	waitBound := requireFakeTimerDuration(t, clock, 2*time.Second, "final wait bound")
 	if waitBound.duration != 2*time.Second {
 		t.Fatalf("wait bound got %v", waitBound.duration)
 	}
 	group.exited <- nil
 	group.alive.Store(false)
-	waitBound.fire()
 	starter.process.wait <- nil
 	outcome := <-done
+	if !waitBound.stopped.Load() {
+		t.Fatal("final wait bound was not stopped")
+	}
 	var timeoutError *processTimeoutError
 	if !errors.As(outcome.err, &timeoutError) || timeoutError.cleanup != cleanupKilled {
 		t.Fatalf("got %T %v, want killed timeout", outcome.err, outcome.err)
@@ -264,12 +300,15 @@ func TestExecRunnerWaitsForLeaderReapAfterGroupCleanup(t *testing.T) {
 		t.Fatalf("first signal got %v", signal)
 	}
 	group.exited <- nil
-	grace := <-clock.timers
+	poll := requirePollAndGraceTimers(t, clock)
 	group.alive.Store(false)
-	group.changed <- struct{}{}
-	grace.fire()
+	poll.fire()
+	reapBound := requireFakeTimerDuration(t, clock, 2*time.Second, "TERM reap bound")
 	starter.process.wait <- nil
 	outcome := <-done
+	if !reapBound.stopped.Load() {
+		t.Fatal("reap bound was not stopped")
+	}
 	var timeoutError *processTimeoutError
 	if !errors.As(outcome.err, &timeoutError) || timeoutError.cleanup != cleanupTerminated {
 		t.Fatalf("got %T %v, want terminated timeout", outcome.err, outcome.err)
@@ -283,15 +322,148 @@ func TestExecRunnerUsesPreopenedGroupTargetAfterLeaderWait(t *testing.T) {
 	(<-clock.timers).fire()
 	<-group.signals
 	group.exited <- nil
-	grace := <-clock.timers
+	poll := requirePollAndGraceTimers(t, clock)
 	group.alive.Store(false)
-	group.changed <- struct{}{}
-	grace.fire()
+	poll.fire()
+	reapBound := requireFakeTimerDuration(t, clock, 2*time.Second, "TERM reap bound")
 	starter.process.wait <- nil
 	<-done
+	if !reapBound.stopped.Load() {
+		t.Fatal("reap bound was not stopped")
+	}
 	select {
 	case signal := <-group.signals:
 		t.Fatalf("unexpected extra group signal %v", signal)
 	default:
+	}
+}
+
+func TestExecRunnerRechecksKilledGroupWithoutChangeNotification(t *testing.T) {
+	runner, clock, starter, group := newFakeExecRunner()
+	group.aliveAt = func(check int32) (bool, error) { return check < 3, nil }
+	done := runFakeProcess(runner, "/bin/true", builtInQueryLimits())
+	<-starter.started
+	(<-clock.timers).fire()
+	<-group.signals
+	(<-clock.timers).fire()
+	<-group.signals
+	finalBound := requireFakeTimer(t, clock, "final wait bound")
+	if finalBound.duration != 2*time.Second {
+		t.Fatalf("final bound got %v", finalBound.duration)
+	}
+	poll := requireFakeTimer(t, clock, "group recheck")
+	if poll.duration >= finalBound.duration {
+		t.Fatalf("group recheck got %v, want shorter than final bound", poll.duration)
+	}
+	poll.fire()
+	<-starter.process.waitCalled
+	select {
+	case timer := <-clock.timers:
+		t.Fatalf("group disappearance reset final bound with %v timer", timer.duration)
+	default:
+	}
+	starter.process.wait <- nil
+	outcome := requireFakeOutcome(t, done)
+	if !finalBound.stopped.Load() {
+		t.Fatal("shared final bound was not stopped after reap")
+	}
+	var timeoutError *processTimeoutError
+	if !errors.As(outcome.err, &timeoutError) || timeoutError.cleanup != cleanupKilled {
+		t.Fatalf("got %T %v, want killed timeout", outcome.err, outcome.err)
+	}
+}
+
+func TestExecRunnerBoundsReapWhenTerminatedGroupIsAbsent(t *testing.T) {
+	runner, clock, starter, group := newFakeExecRunner()
+	done := runFakeProcess(runner, "/bin/true", builtInQueryLimits())
+	<-starter.started
+	(<-clock.timers).fire()
+	<-group.signals
+	grace := <-clock.timers
+	group.alive.Store(false)
+	grace.fire()
+	finalBound := requireFakeTimerDuration(t, clock, 2*time.Second, "bounded reap")
+	if finalBound.duration != 2*time.Second {
+		t.Fatalf("reap bound got %v", finalBound.duration)
+	}
+	finalBound.fire()
+	outcome := requireFakeOutcome(t, done)
+	var waitError *processWaitError
+	if !errors.As(outcome.err, &waitError) || waitError.kind != waitBoundExceeded || waitError.bound != 2*time.Second {
+		t.Fatalf("got %T %v, want exact bounded-reap error", outcome.err, outcome.err)
+	}
+}
+
+func TestExecRunnerBoundsReapAfterSuccessfulLeaderCompletion(t *testing.T) {
+	runner, clock, starter, group := newFakeExecRunner()
+	done := runFakeProcess(runner, "/bin/true", builtInQueryLimits())
+	<-starter.started
+	<-clock.timers
+	group.alive.Store(false)
+	group.exited <- nil
+	finalBound := requireFakeTimer(t, clock, "successful completion reap")
+	if finalBound.duration != 2*time.Second {
+		t.Fatalf("reap bound got %v", finalBound.duration)
+	}
+	finalBound.fire()
+	outcome := requireFakeOutcome(t, done)
+	var waitError *processWaitError
+	if !errors.As(outcome.err, &waitError) || waitError.kind != waitBoundExceeded {
+		t.Fatalf("got %T %v, want bounded-reap error", outcome.err, outcome.err)
+	}
+}
+
+func requireFakeTimer(t *testing.T, clock *fakeProcessClock, operation string) *fakeProcessTimer {
+	t.Helper()
+	for {
+		select {
+		case timer := <-clock.timers:
+			if !timer.stopped.Load() {
+				return timer
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("runner did not create timer for %s", operation)
+			return nil
+		}
+	}
+}
+
+func requireFakeTimerDuration(
+	t *testing.T,
+	clock *fakeProcessClock,
+	duration time.Duration,
+	operation string,
+) *fakeProcessTimer {
+	t.Helper()
+	for {
+		timer := requireFakeTimer(t, clock, operation)
+		if timer.duration == duration {
+			return timer
+		}
+		timer.fire()
+	}
+}
+
+func requirePollAndGraceTimers(t *testing.T, clock *fakeProcessClock) *fakeProcessTimer {
+	t.Helper()
+	first := requireFakeTimer(t, clock, "TERM grace or group recheck")
+	second := requireFakeTimer(t, clock, "TERM grace or group recheck")
+	for _, timer := range []*fakeProcessTimer{first, second} {
+		if timer.duration == unixGroupPollInterval {
+			return timer
+		}
+	}
+	t.Fatalf("timers got %v and %v, want TERM grace and group recheck", first.duration, second.duration)
+	return nil
+}
+
+func requireFakeOutcome(t *testing.T, done <-chan asyncProcessResult) asyncProcessResult {
+	t.Helper()
+	select {
+	case outcome := <-done:
+		return outcome
+	case <-time.After(time.Second):
+		t.Fatal("runner did not return")
+		return asyncProcessResult{}
 	}
 }

@@ -158,7 +158,7 @@ func TestCommandMapsTimeoutToFalseWithoutError(t *testing.T) {
 	<-group.signals
 	group.exited <- nil
 	grace := <-clock.timers
-	group.changed <- struct{}{}
+	group.alive.Store(false)
 	grace.fire()
 	<-clock.timers
 	starter.process.wait <- nil

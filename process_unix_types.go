@@ -156,7 +156,6 @@ type processStarter interface {
 
 type processGroup interface {
 	LeaderExited() <-chan error
-	Changed() <-chan struct{}
 	Alive() (bool, error)
 	Signal(syscall.Signal) error
 	Close()
