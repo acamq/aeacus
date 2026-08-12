@@ -47,7 +47,8 @@ def parse_metadata(path: Path) -> list[JsonValue]:
             raise RuntimeError(f"malformed metadata at line {index + 1}")
         file_hash = lines[index + 1]
         row: JsonObject = {"path": parts[0], "present": True, "type": parts[1], "uid": int(parts[2]), "gid": int(parts[3]), "mode": parts[4], "nlink": int(parts[5]), "bytes": int(parts[6])}
-        if file_hash != "-": row["sha256"] = file_hash
+        if file_hash == "stat-only": row["content_hash_policy"] = "stat-only"
+        elif file_hash != "-": row["sha256"] = file_hash
         rows.append(row)
         index += 2
     return sorted(rows, key=lambda item: str(item["path"]) if isinstance(item, dict) else "")

@@ -13,28 +13,29 @@ case "$SOURCE_DATE_EPOCH" in *[!0-9]*|'') exit 1 ;; esac
 export SOURCE_DATE_EPOCH BATCH=yes DISABLE_VULNERABILITIES=yes PACKAGE_BUILDING=yes
 
 cp sources/ports.tar "$out/sources/ports.tar"
-mkdir "$work/ports"
-tar -xf sources/ports.tar -C "$work/ports"
+misc/tests/freebsd/ci/extract-source.sh sources/ports.tar "$work/ports"
 
-rm -rf /usr/ports/packages
-mkdir -p /usr/ports/packages
+packages="$work/packages"
+distfiles="$work/distfiles"
+mkdir -p "$packages" "$distfiles"
 for origin in x11-wm/xfce4 x11/lightdm x11/lightdm-gtk-greeter devel/xdg-utils; do
-make -C "$work/ports/$origin" package-recursive
+make -C "$work/ports/$origin" package-recursive PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles"
 done
 mkdir -p "$work/ports-packages"
-find "$work/ports/packages" /usr/ports/packages -type f -name '*.pkg' -exec cp '{}' "$work/ports-packages/" ';' 2>/dev/null || true
+find "$packages" -type f -name '*.pkg' -exec cp '{}' "$work/ports-packages/" ';'
 [ "$(find "$work/ports-packages" -type f -name '*.pkg' | wc -l)" -gt 0 ]
 mkdir -p "$out/ports-raw"
 cp "$work/ports-packages"/*.pkg "$out/ports-raw/"
 
 if [ "$RELEASE" = 15.1 ]; then
     cp sources/pkgbase.tar "$out/sources/pkgbase.tar"
-    mkdir "$work/src"
-    tar -xf sources/pkgbase.tar -C "$work/src"
-    make -C "$work/src" -j2 buildworld
-    make -C "$work/src" packages
+    misc/tests/freebsd/ci/extract-source.sh sources/pkgbase.tar "$work/src"
+    objdir="$work/obj"
+    mkdir "$objdir"
+    make -C "$work/src" -j2 buildworld MAKEOBJDIRPREFIX="$objdir"
+    make -C "$work/src" packages MAKEOBJDIRPREFIX="$objdir"
     mkdir -p "$work/pkgbase-packages"
-    find "$work/src" /usr/obj -type f -name '*.pkg' -exec cp '{}' "$work/pkgbase-packages/" ';' 2>/dev/null || true
+    find "$work/src" "$objdir" -type f -name '*.pkg' -exec cp '{}' "$work/pkgbase-packages/" ';'
     [ "$(find "$work/pkgbase-packages" -type f -name '*.pkg' | wc -l)" -gt 0 ]
     mkdir -p "$out/pkgbase-raw"
     cp "$work/pkgbase-packages"/*.pkg "$out/pkgbase-raw/"

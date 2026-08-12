@@ -18,7 +18,15 @@ while IFS= read -r path; do
     [ -n "$path" ] || continue
     if [ -e "$path" ] || [ -L "$path" ]; then
         stat -f '%N\t%HT\t%u\t%g\t%Mp%Lp\t%l\t%z' "$path"
-        if [ -f "$path" ]; then sha256 -q "$path"; else printf '%s\n' -; fi
+        policy=$(python3 misc/tests/freebsd/metadata_policy.py "$path")
+        if [ "$policy" = stat-only ]; then
+            [ -f "$path" ]
+            printf '%s\n' stat-only
+        elif [ -f "$path" ]; then
+            sha256 -q "$path"
+        else
+            printf '%s\n' -
+        fi
     else
         printf '%s\tabsent\n' "$path"
     fi

@@ -47,7 +47,11 @@ def write_rows(root: Path, document: dict[str, object]) -> None:
         (row / "proc-h.sha256").write_text(str(row_value["proc_h_sha256"]) + "\n", encoding="ascii")
         (row / "probe-source.sha256").write_text(str(document["probe_source_sha256"]) + "\n", encoding="ascii")
         paths = (FREEBSD / "metadata-paths.txt").read_text(encoding="utf-8").splitlines()
-        (row / "metadata.tsv").write_text("".join(f"{path}\tabsent\n" for path in paths), encoding="utf-8")
+        metadata = []
+        for path in paths:
+            if path == "/etc/master.passwd": metadata.append(f"{path}\tRegular File\t0\t0\t0600\t1\t1\nstat-only\n")
+            else: metadata.append(f"{path}\tabsent\n")
+        (row / "metadata.tsv").write_text("".join(metadata), encoding="utf-8")
 
 
 def main() -> int:

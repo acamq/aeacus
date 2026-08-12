@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Final
 
 from misc.tests.freebsd.json_contract import ContractError, JsonObject, require_array, require_bool, require_hash, require_int, require_keys, require_object, require_string
+from misc.tests.freebsd.metadata_policy import PolicyError, parse_policy
 from misc.tests.freebsd.validate_abi import ACTION_SHA, EXPECTED_ROWS
 
 TOP_KEYS: Final = {"schema", "probe_source_sha256", "action_sha", "workflow_commit", "run_id", "run_attempt", "rows"}
@@ -19,6 +20,7 @@ ROW_KEYS: Final = {"release", "arch", "image_sha256", "paths"}
 ABSENT_KEYS: Final = {"path", "present"}
 PRESENT_KEYS: Final = {"path", "present", "type", "uid", "gid", "mode", "nlink", "bytes"}
 REGULAR_KEYS: Final = PRESENT_KEYS | {"sha256"}
+STAT_ONLY_KEYS: Final = PRESENT_KEYS | {"content_hash_policy"}
 
 
 def expected_paths() -> tuple[str, ...]:
@@ -33,11 +35,18 @@ def validate_path(value: JsonObject) -> str:
         require_keys(value, ABSENT_KEYS, "$.rows[].paths[]")
         return path
     kind = require_string(value.get("type"), "$.rows[].paths[].type")
-    require_keys(value, REGULAR_KEYS if kind == "Regular File" else PRESENT_KEYS, "$.rows[].paths[]")
+    if kind == "Regular File" and path == "/etc/master.passwd":
+        require_keys(value, STAT_ONLY_KEYS, "$.rows[].paths[]")
+        try:
+            parse_policy(path, require_string(value["content_hash_policy"], "$.rows[].paths[].content_hash_policy"))
+        except PolicyError as error:
+            raise ContractError(detail=str(error)) from error
+    else:
+        require_keys(value, REGULAR_KEYS if kind == "Regular File" else PRESENT_KEYS, "$.rows[].paths[]")
     for field in ("uid", "gid", "nlink", "bytes"):
         require_int(value[field], f"$.rows[].paths[].{field}")
     require_string(value["mode"], "$.rows[].paths[].mode")
-    if kind == "Regular File": require_hash(value["sha256"], "$.rows[].paths[].sha256")
+    if kind == "Regular File" and path != "/etc/master.passwd": require_hash(value["sha256"], "$.rows[].paths[].sha256")
     return path
 
 
