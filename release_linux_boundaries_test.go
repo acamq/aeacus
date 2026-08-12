@@ -106,9 +106,9 @@ func TestLinuxCleanupStopsBeforeLaterIndependentCommand(t *testing.T) {
 	}
 }
 
-func TestLinuxCleanupRefreshesPackageMetadataBeforeBleachBitInstall(t *testing.T) {
+func TestLinuxCleanupInstallsBleachBitWithoutPackageMetadataRefresh(t *testing.T) {
 	commands := linuxBleachBitInstallCommands()
-	want := []string{"apt-get update", "apt-get install -y bleachbit"}
+	want := []string{"apt-get install -y bleachbit"}
 
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("commands = %v, want %v", commands, want)

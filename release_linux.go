@@ -184,5 +184,5 @@ func linuxForensicCleanupCommands() []string {
 }
 
 func linuxBleachBitInstallCommands() []string {
-	return []string{"apt-get update", "apt-get install -y bleachbit"}
+	return []string{"apt-get install -y bleachbit"}
 }
