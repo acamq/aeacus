@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: freebsd-fixtures-${{ github.sha }}-${{ github.run_attempt }}
+  group: freebsd-vm-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -46,6 +46,7 @@ jobs:
     timeout-minutes: 360
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - release: '14.4'

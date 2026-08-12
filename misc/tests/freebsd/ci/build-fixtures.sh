@@ -13,16 +13,34 @@ mkdir -p "$out/sources" "$work"
 
 case "$SOURCE_DATE_EPOCH" in *[!0-9]*|'') exit 1 ;; esac
 export SOURCE_DATE_EPOCH BATCH=yes DISABLE_VULNERABILITIES=yes PACKAGE_BUILDING=yes
-export NO_DEPENDS=yes
 
 cp sources/ports.tar "$out/sources/ports.tar"
 misc/tests/freebsd/ci/extract-source.sh sources/ports.tar "$work/ports"
 
 packages="$work/packages"
 distfiles="$work/distfiles"
-mkdir -p "$packages" "$distfiles"
-for origin in x11-wm/xfce4 x11/lightdm x11/lightdm-gtk-greeter devel/xdg-utils; do
-make -C "$work/ports/$origin" package-recursive PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles"
+sysroot="$work/sysroot"
+localbase="$sysroot/usr/local"
+mkdir -p "$packages" "$distfiles" "$localbase"
+roots="x11-wm/xfce4 x11/lightdm x11/lightdm-gtk-greeter devel/xdg-utils"
+for origin in $roots; do
+    make -C "$work/ports/$origin" all-depends-list PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles" WRKDIRPREFIX="$work/wrk" INSTALL_AS_USER=yes
+done | tail -r | awk '!seen[$0]++' > "$work/dependencies"
+: > "$work/staged-packages"
+while IFS= read -r dependency; do
+    [ -n "$dependency" ] || continue
+    make -C "$dependency" package-noinstall PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles" WRKDIRPREFIX="$work/wrk" LOCALBASE="$localbase" PREFIX=/usr/local INSTALL_AS_USER=yes NO_DEPENDS=yes CC="cc -I$localbase/include -L$localbase/lib" CXX="c++ -I$localbase/include -L$localbase/lib"
+    package_file=$(make -C "$dependency" -V PKGFILE PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles" WRKDIRPREFIX="$work/wrk" LOCALBASE="$localbase" PREFIX=/usr/local INSTALL_AS_USER=yes)
+    case "$(cat "$work/staged-packages")" in
+        *"|$package_file|"*) ;;
+        *) tar -xf "$package_file" -C "$sysroot" --exclude +COMPACT_MANIFEST --exclude +MANIFEST; printf '|%s|\n' "$package_file" >> "$work/staged-packages" ;;
+    esac
+done < "$work/dependencies"
+export PATH="$localbase/bin:$localbase/sbin:$PATH"
+export PKG_CONFIG_SYSROOT_DIR="$sysroot"
+export PKG_CONFIG_LIBDIR="$localbase/libdata/pkgconfig:$localbase/lib/pkgconfig:$localbase/share/pkgconfig"
+for origin in $roots; do
+    make -C "$work/ports/$origin" package-noinstall PORTSDIR="$work/ports" PACKAGES="$packages" DISTDIR="$distfiles" WRKDIRPREFIX="$work/wrk" LOCALBASE="$localbase" PREFIX=/usr/local INSTALL_AS_USER=yes NO_DEPENDS=yes CC="cc -I$localbase/include -L$localbase/lib" CXX="c++ -I$localbase/include -L$localbase/lib"
 done
 mkdir -p "$work/ports-packages"
 find "$packages" -type f -name '*.pkg' -exec cp '{}' "$work/ports-packages/" ';'

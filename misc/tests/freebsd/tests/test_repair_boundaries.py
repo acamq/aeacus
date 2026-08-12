@@ -36,6 +36,14 @@ def test_static_boundaries() -> None:
     assert "PACKAGES=" in fixtures and "PORTSDIR=" in fixtures and "DISTDIR=" in fixtures
     assert "artifact_arch=$ARCH" in fixtures and "unset ARCH" in fixtures
     assert "NO_DEPENDS=yes" in fixtures
+    assert "INSTALL_AS_USER=yes" in fixtures
+    assert 'PREFIX=/usr/local' in fixtures
+    assert 'PATH="$localbase/bin:$localbase/sbin:$PATH"' in fixtures
+    assert "package-noinstall" in fixtures and "all-depends-list" in fixtures
+    assert "tail -r" in fixtures
+    assert 'PKG_CONFIG_SYSROOT_DIR="$sysroot"' in fixtures
+    assert 'tar -xf "$package_file" -C "$sysroot" --exclude +COMPACT_MANIFEST --exclude +MANIFEST' in fixtures
+    assert 'CC="cc -I$localbase/include -L$localbase/lib"' in fixtures
 
 
 def test_discovery_never_reads_sensitive_content() -> None:
@@ -112,14 +120,14 @@ def test_fixture_driver_uses_only_writable_outputs() -> None:
     forbidden = ("/usr/ports", "/usr/obj", "sudo ", "doas ", "PACKAGES=/", "DISTDIR=/")
     for value in forbidden:
         assert value not in fixtures
-    expected = ('packages="$work/packages"', 'distfiles="$work/distfiles"', 'PORTSDIR="$work/ports"', 'PACKAGES="$packages"', 'DISTDIR="$distfiles"')
+    expected = ('packages="$work/packages"', 'distfiles="$work/distfiles"', 'sysroot="$work/sysroot"', 'localbase="$sysroot/usr/local"', 'PORTSDIR="$work/ports"', 'PACKAGES="$packages"', 'DISTDIR="$distfiles"')
     for value in expected:
         assert value in fixtures
     mutation_commands = ("mkdir", "cp", "tar", "make", "rm")
     for line in fixtures.splitlines():
         stripped = line.strip()
         if stripped.startswith(mutation_commands):
-            assert any(value in stripped for value in ('"$work', '"$out', '"$packages', '"$distfiles', '"$objdir')) or stripped.startswith("tar -xf sources/")
+            assert any(value in stripped for value in ('"$work', '"$out', '"$packages', '"$distfiles', '"$objdir', '"$dependency', '"$package_file', '"$tools')) or stripped.startswith("tar -xf sources/")
 
 
 def test_archive_members_are_safe() -> None:
@@ -142,6 +150,22 @@ def test_archive_filter_executes() -> None:
         result = subprocess.run(["sh", str(FREEBSD / "ci/extract-source.sh"), str(archive), str(root / "output")], check=False, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
         assert (root / "output/safe").read_text(encoding="ascii") == "fixture"
+
+
+def test_dependency_packages_extract_into_writable_sysroot() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        package_root = root / "package"
+        (package_root / "usr/local/bin").mkdir(parents=True)
+        (package_root / "usr/local/bin/tool").write_text("tool", encoding="ascii")
+        (package_root / "+COMPACT_MANIFEST").write_text("metadata", encoding="ascii")
+        package = root / "dependency.pkg"
+        subprocess.run(["tar", "-cf", package, "."], cwd=package_root, check=True)
+        sysroot = root / "sysroot"
+        sysroot.mkdir()
+        subprocess.run(["tar", "-xf", package, "-C", sysroot, "--exclude", "+COMPACT_MANIFEST", "--exclude", "+MANIFEST"], check=True)
+        assert (sysroot / "usr/local/bin/tool").read_text(encoding="ascii") == "tool"
+        assert not (sysroot / "+COMPACT_MANIFEST").exists()
 
 
 def test_guest_shell_uses_base_tools() -> None:
@@ -172,6 +196,13 @@ def test_workflow_row_identity_preserves_hyphenated_architecture() -> None:
         assert 'cut -d- -f4' not in workflow
 
 
+def test_native_vms_are_serialized_per_workflow() -> None:
+    for workflow_name in ("freebsd-abi-discovery.yml", "freebsd-fixture-build.yml"):
+        workflow = (ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+        assert "max-parallel: 1" in workflow
+        assert "group: freebsd-vm-${{ github.sha }}" in workflow
+
+
 def test_awk_variables_avoid_builtin_names() -> None:
     builtins = ("index", "length", "split", "substr", "match", "sub", "gsub", "sprintf")
     for script in sorted((FREEBSD / "ci").glob("*.sh")):
@@ -188,9 +219,11 @@ def main() -> int:
     test_fixture_driver_uses_only_writable_outputs()
     test_archive_members_are_safe()
     test_archive_filter_executes()
+    test_dependency_packages_extract_into_writable_sysroot()
     test_guest_shell_uses_base_tools()
     test_host_python_runs_as_modules()
     test_workflow_row_identity_preserves_hyphenated_architecture()
+    test_native_vms_are_serialized_per_workflow()
     test_awk_variables_avoid_builtin_names()
     print("Task 10 repair boundaries: PASS")
     return 0
