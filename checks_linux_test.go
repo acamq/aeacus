@@ -133,7 +133,7 @@ func TestTrustedCommandFamilyOperationalFailureContract(t *testing.T) {
 func TestCommandMapsTimeoutToFalseWithoutError(t *testing.T) {
 	previousRunner := unixRunner
 	t.Cleanup(func() { unixRunner = previousRunner })
-	runner, clock, starter := newFakeExecRunner()
+	runner, clock, starter, group := newFakeExecRunner()
 	unixRunner = runner
 	done := make(chan struct {
 		result bool
@@ -155,7 +155,7 @@ func TestCommandMapsTimeoutToFalseWithoutError(t *testing.T) {
 		t.Fatalf("trusted timeout got %v", timeout.duration)
 	}
 	timeout.fire()
-	<-starter.process.signals
+	<-group.signals
 	<-clock.timers
 	starter.process.wait <- nil
 	outcome := <-done
