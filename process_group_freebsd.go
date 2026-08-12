@@ -20,16 +20,25 @@ func (osProcessGroupFactory) Open(pid int) (processGroup, error) {
 	if err != nil {
 		return nil, err
 	}
+	cancelPipe := make([]int, 2)
+	if err := unix.Pipe2(cancelPipe, unix.O_CLOEXEC|unix.O_NONBLOCK); err != nil {
+		unix.Close(kqueue)
+		return nil, err
+	}
 	changes := []unix.Kevent_t{
 		{Ident: uint64(pid), Filter: unix.EVFILT_PROC, Flags: unix.EV_ADD | unix.EV_ONESHOT, Fflags: unix.NOTE_EXIT},
 		{Ident: freeBSDCancelEventID, Filter: unix.EVFILT_USER, Flags: unix.EV_ADD},
+		{Ident: uint64(cancelPipe[0]), Filter: unix.EVFILT_READ, Flags: unix.EV_ADD},
 	}
 	if _, err := unix.Kevent(kqueue, changes, nil, nil); err != nil {
+		unix.Close(cancelPipe[0])
+		unix.Close(cancelPipe[1])
 		unix.Close(kqueue)
 		return nil, err
 	}
 	group := &freeBSDProcessGroup{
-		pid: pid, kqueue: kqueue, exited: make(chan error, 1), done: make(chan struct{}),
+		pid: pid, kqueue: kqueue, cancelRead: cancelPipe[0], cancelWrite: cancelPipe[1],
+		exited: make(chan error, 1), done: make(chan struct{}),
 	}
 	go group.observeLeader()
 	return group, nil
@@ -38,6 +47,8 @@ func (osProcessGroupFactory) Open(pid int) (processGroup, error) {
 type freeBSDProcessGroup struct {
 	pid          int
 	kqueue       int
+	cancelRead   int
+	cancelWrite  int
 	exited       chan error
 	done         chan struct{}
 	leaderExited atomic.Bool
@@ -56,26 +67,49 @@ func (g *freeBSDProcessGroup) Close() {
 				break
 			}
 		}
+		for {
+			_, err := unix.Write(g.cancelWrite, []byte{1})
+			if !errors.Is(err, syscall.EINTR) {
+				break
+			}
+		}
 		<-g.done
+		unix.Close(g.cancelRead)
+		unix.Close(g.cancelWrite)
 		unix.Close(g.kqueue)
 	})
 }
 
 func (g *freeBSDProcessGroup) observeLeader() {
 	defer close(g.done)
-	events := make([]unix.Kevent_t, 2)
+	events := make([]unix.Kevent_t, 3)
 	count, err := unix.Kevent(g.kqueue, nil, events, nil)
 	if err != nil {
 		g.exited <- err
 		return
 	}
-	for _, event := range events[:count] {
-		if event.Filter == unix.EVFILT_PROC && event.Ident == uint64(g.pid) {
-			g.leaderExited.Store(true)
-			g.exited <- nil
-			return
+	exited, err := freeBSDLeaderObservation(events[:count], g.pid)
+	if err != nil {
+		g.exited <- err
+		return
+	}
+	if exited {
+		g.leaderExited.Store(true)
+		g.exited <- nil
+	}
+}
+
+func freeBSDLeaderObservation(events []unix.Kevent_t, pid int) (bool, error) {
+	var observationError error
+	for _, event := range events {
+		if event.Filter == unix.EVFILT_PROC && event.Ident == uint64(pid) {
+			return true, nil
+		}
+		if event.Flags&unix.EV_ERROR != 0 && event.Data != 0 {
+			observationError = syscall.Errno(event.Data)
 		}
 	}
+	return false, observationError
 }
 
 func (g *freeBSDProcessGroup) Signal(signal syscall.Signal) error {
