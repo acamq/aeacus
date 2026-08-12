@@ -23,7 +23,7 @@ var (
 )
 
 type processCommandRunner interface {
-	Run(string, []string, processProfile) (processResult, error)
+	RunBuiltIn(string, []string) (processResult, error)
 }
 
 type processOperandError struct {
@@ -94,10 +94,9 @@ func programVersionWithRunner(c cond, runner processCommandRunner) (bool, error)
 }
 
 func queryDpkg(runner processCommandRunner, name string) (packageQuery, bool, error) {
-	result, err := runner.Run(
+	result, err := runner.RunBuiltIn(
 		dpkgQueryPath,
 		[]string{"-W", "-f=${Status}\t${Version}\n", name},
-		builtInQuery,
 	)
 	if err != nil {
 		var startError *processStartError
@@ -114,10 +113,9 @@ func queryDpkg(runner processCommandRunner, name string) (packageQuery, bool, er
 }
 
 func queryRPM(runner processCommandRunner, name string) (packageQuery, error) {
-	result, err := runner.Run(
+	result, err := runner.RunBuiltIn(
 		rpmQueryPath,
 		[]string{"-q", "--qf", "%{VERSION}-%{RELEASE}\n", name},
-		builtInQuery,
 	)
 	if err != nil {
 		if code, ok := processErrorExitCode(err); ok && code == 1 {
@@ -181,7 +179,7 @@ func serviceUpWithRunner(c cond, runner processCommandRunner) (bool, error) {
 	if !serviceOperandPattern.MatchString(c.Name) {
 		return false, &processOperandError{kind: "service", value: c.Name}
 	}
-	result, err := runner.Run(systemctlPath, []string{"is-active", c.Name}, builtInQuery)
+	result, err := runner.RunBuiltIn(systemctlPath, []string{"is-active", c.Name})
 	state := strings.TrimSuffix(string(result.stdout), "\n")
 	if err == nil {
 		if state == "active" || state == "reloading" {

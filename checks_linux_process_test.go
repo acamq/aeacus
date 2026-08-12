@@ -11,9 +11,8 @@ import (
 )
 
 type recordedProcessCall struct {
-	path    string
-	args    []string
-	profile processProfile
+	path string
+	args []string
 }
 
 type scriptedProcessOutcome struct {
@@ -26,8 +25,8 @@ type scriptedProcessRunner struct {
 	outcomes []scriptedProcessOutcome
 }
 
-func (r *scriptedProcessRunner) Run(path string, args []string, profile processProfile) (processResult, error) {
-	r.calls = append(r.calls, recordedProcessCall{path: path, args: append([]string(nil), args...), profile: profile})
+func (r *scriptedProcessRunner) RunBuiltIn(path string, args []string) (processResult, error) {
+	r.calls = append(r.calls, recordedProcessCall{path: path, args: append([]string(nil), args...)})
 	if len(r.outcomes) == 0 {
 		return processResult{}, errors.New("unexpected process call")
 	}
@@ -88,9 +87,8 @@ func TestProgramInstalledUsesLiteralDpkgArgvAndClassifiesAbsence(t *testing.T) {
 		t.Fatalf("installed got (%v, %v)", got, err)
 	}
 	wantCall := recordedProcessCall{
-		path:    "/usr/bin/dpkg-query",
-		args:    []string{"-W", "-f=${Status}\t${Version}\n", "safe+name.x86_64"},
-		profile: builtInQuery,
+		path: "/usr/bin/dpkg-query",
+		args: []string{"-W", "-f=${Status}\t${Version}\n", "safe+name.x86_64"},
 	}
 	if !reflect.DeepEqual(runner.calls, []recordedProcessCall{wantCall}) {
 		t.Fatalf("calls got %#v, want %#v", runner.calls, wantCall)
@@ -114,9 +112,8 @@ func TestProgramInstalledFallsBackOnlyWhenDpkgExecutableIsAbsent(t *testing.T) {
 		t.Fatalf("rpm fallback got (%v, %v)", got, err)
 	}
 	wantRPM := recordedProcessCall{
-		path:    "/usr/bin/rpm",
-		args:    []string{"-q", "--qf", "%{VERSION}-%{RELEASE}\n", "bash"},
-		profile: builtInQuery,
+		path: "/usr/bin/rpm",
+		args: []string{"-q", "--qf", "%{VERSION}-%{RELEASE}\n", "bash"},
 	}
 	if len(runner.calls) != 2 || !reflect.DeepEqual(runner.calls[1], wantRPM) {
 		t.Fatalf("rpm call got %#v", runner.calls)
@@ -176,7 +173,7 @@ func TestServiceUpUsesLiteralArgvAndExplicitStatusClassification(t *testing.T) {
 			if got != tt.want || (err != nil) != tt.wantErr {
 				t.Fatalf("got (%v, %v), want (%v, err=%v)", got, err, tt.want, tt.wantErr)
 			}
-			want := recordedProcessCall{path: "/usr/bin/systemctl", args: []string{"is-active", "sshd.service"}, profile: builtInQuery}
+			want := recordedProcessCall{path: "/usr/bin/systemctl", args: []string{"is-active", "sshd.service"}}
 			if len(runner.calls) != 1 || !reflect.DeepEqual(runner.calls[0], want) {
 				t.Fatalf("call got %#v", runner.calls)
 			}
