@@ -57,27 +57,6 @@ func (c cond) AutoCheckUpdatesEnabled() (bool, error) {
 	return result, err
 }
 
-// Command checks if a given shell command ran successfully (that is, did not
-// return or raise any errors).
-func (c cond) Command() (bool, error) {
-	c.requireArgs("Cmd")
-	if c.Cmd == "" {
-		fail("Missing command for", c.Type)
-	}
-	err := shellCommand(c.Cmd)
-	if err != nil {
-		// This check does not return errors, since it is based on successful
-		// execution. If any errors occurred, it means that the check failed,
-		// not errored out.
-		//
-		// It would be an error if failure to execute the command resulted in
-		// an inability to meaningfully score the check (e.g., if the uname
-		// syscall failed for KernelVersion).
-		return false, nil
-	}
-	return true, nil
-}
-
 func (c cond) FirewallUp() (bool, error) {
 	result, err := cond{
 		Path:  "/etc/ufw/ufw.conf",
@@ -210,39 +189,6 @@ func (c cond) PermissionIs() (bool, error) {
 		}
 	}
 	return true, nil
-}
-
-func (c cond) ProgramInstalled() (bool, error) {
-	c.requireArgs("Name")
-	result, err := cond{
-		Cmd:   "dpkg -s " + c.Name,
-		Value: " install",
-	}.CommandContains()
-
-	// If dpkg fails, use rpm
-	if err != nil {
-		return cond{
-			Cmd: "rpm -q " + c.Name,
-		}.Command()
-	}
-
-	return result, err
-}
-
-func (c cond) ProgramVersion() (bool, error) {
-	c.requireArgs("Name", "Value")
-	return cond{
-		Cmd:   `dpkg -s ` + c.Name + ` | grep Version | cut -d" " -f2`,
-		Value: c.Value,
-	}.CommandOutput()
-}
-
-func (c cond) ServiceUp() (bool, error) {
-	// TODO: detect and use other init systems
-	c.requireArgs("Name")
-	return cond{
-		Cmd: "systemctl is-active " + c.Name,
-	}.Command()
 }
 
 func (c cond) UserExists() (bool, error) {

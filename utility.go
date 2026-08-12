@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"io/ioutil"
 	"os"
 	"runtime"
 	"strings"
@@ -66,15 +65,6 @@ func timeCheck() bool {
 	return false
 }
 
-// writeFile wraps ioutil's WriteFile function, and prints
-// the error the screen if one occurs.
-func writeFile(fileName, fileContent string) {
-	err := ioutil.WriteFile(fileName, []byte(fileContent), 0o644)
-	if err != nil {
-		fail("Error writing file: " + err.Error())
-	}
-}
-
 // PermsCheck is a convenience function wrapper around
 // adminCheck, which prints an error indicating that admin
 // permissions are needed.
@@ -83,48 +73,6 @@ func permsCheck() {
 		fail("You need to run this binary as root or Administrator in order to do that.")
 		os.Exit(1)
 	}
-}
-
-// shellCommand executes a given command in a shell environment.
-func shellCommand(commandGiven string) error {
-	cmd := rawCmd(commandGiven)
-	if err := cmd.Run(); err != nil {
-		if verboseEnabled {
-			if len(commandGiven) > shellCmdLen {
-				fail("Command \"" + commandGiven[:shellCmdLen] + "...\" errored out (code " + err.Error() + ").")
-			} else {
-				fail("Command \"" + commandGiven + "\" errored out (code " + err.Error() + ").")
-			}
-		}
-		return err
-	}
-	return nil
-}
-
-// shellCommandOutput executes a given command in a shell environment and
-// returns its output.
-func shellCommandOutput(commandGiven string) (string, error) {
-	out, err := rawCmd(commandGiven).Output()
-	maxOutput := 300
-	suffix := "..."
-	if len(out) < maxOutput {
-		maxOutput = len(out)
-		suffix = ""
-	}
-	if err != nil {
-		debug("Command output ( len:", len(out), ") (error:", err.Error()+"):", string(out[:maxOutput])+suffix)
-		if verboseEnabled {
-			if len(commandGiven) > shellCmdLen {
-				fail("Command \"" + commandGiven[:shellCmdLen] + "...\" errored out (code " + err.Error() + ").")
-			} else {
-				fail("Command \"" + commandGiven + "\" errored out (code " + err.Error() + ").")
-			}
-		}
-		return "", err
-	} else {
-		debug("Command output ( len:", len(out), ") (error: nil):", string(out[:maxOutput])+suffix)
-	}
-	return string(out), err
 }
 
 // assignPoints is used to automatically assign points to checks that don't
