@@ -67,8 +67,8 @@ func TestExecRunnerReapsLeaderExactlyOnceAfterGroupCleanup(t *testing.T) {
 		t.Fatalf("leader reaped before group cleanup: Wait calls=%d", got)
 	}
 	grace.fire()
-	<-clock.timers
-	outcome := <-done
+	requireFakeTimerDurationUntil(t, clock, 2*time.Second, "exact-one-reap final wait", fireProcessGroupPoll(t))
+	outcome := waitForRealCleanup(t, clock, done)
 	if got := process.waitCalls.Load(); got != 1 {
 		t.Fatalf("leader Wait calls=%d, want exactly 1", got)
 	}
@@ -76,9 +76,7 @@ func TestExecRunnerReapsLeaderExactlyOnceAfterGroupCleanup(t *testing.T) {
 	if !errors.As(outcome.err, &timeoutError) || timeoutError.cleanup != cleanupKilled {
 		t.Fatalf("got %T %v, want killed timeout", outcome.err, outcome.err)
 	}
-	if err := syscall.Kill(descendantPID, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("descendant %d remains: %v", descendantPID, err)
-	}
+	requireProcessNonExecutable(t, descendantPID)
 }
 
 type countingProcessStarter struct {
@@ -140,16 +138,43 @@ func testLeaderExitWithLiveDescendant(t *testing.T, mode string) {
 	default:
 	}
 	grace.fire()
-	if waitBound := requireFakeTimerDuration(t, clock, 2*time.Second, "real process final wait"); waitBound.duration != 2*time.Second {
+	waitBound := requireFakeTimerDurationUntil(t, clock, 2*time.Second, "real process final wait", fireProcessGroupPoll(t))
+	if waitBound.duration != 2*time.Second {
 		t.Fatalf("wait bound got %v", waitBound.duration)
 	}
-	outcome := <-done
+	outcome := waitForRealCleanup(t, clock, done)
 	var timeoutError *processTimeoutError
 	if !errors.As(outcome.err, &timeoutError) || timeoutError.cleanup != cleanupKilled {
 		t.Fatalf("got %T %v, want killed timeout", outcome.err, outcome.err)
 	}
-	if err := syscall.Kill(descendantPID, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("descendant %d remains: %v", descendantPID, err)
+	requireProcessNonExecutable(t, descendantPID)
+}
+
+func waitForRealCleanup(t *testing.T, clock *fakeProcessClock, done <-chan asyncProcessResult) asyncProcessResult {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case outcome := <-done:
+			return outcome
+		case timer := <-clock.timers:
+			if timer.duration != unixGroupPollInterval {
+				t.Fatalf("unexpected cleanup timer %v", timer.duration)
+			}
+			timer.fire()
+		case <-deadline:
+			t.Fatal("real process cleanup did not finish")
+		}
+	}
+}
+
+func fireProcessGroupPoll(t *testing.T) func(*fakeProcessTimer) {
+	t.Helper()
+	return func(timer *fakeProcessTimer) {
+		if timer.duration != unixGroupPollInterval {
+			t.Fatalf("unexpected pre-bound timer %v", timer.duration)
+		}
+		timer.fire()
 	}
 }
 
@@ -180,17 +205,15 @@ func testExitedLeaderWithPipeHoldingDescendant(t *testing.T) {
 	default:
 	}
 	grace.fire()
-	waitBound := requireFakeTimerDuration(t, clock, 2*time.Second, "WaitDelay final wait")
+	waitBound := requireFakeTimerDurationUntil(t, clock, 2*time.Second, "WaitDelay final wait", fireProcessGroupPoll(t))
 	if waitBound.duration != 2*time.Second {
 		t.Fatalf("wait bound got %v", waitBound.duration)
 	}
-	outcome := <-done
+	outcome := waitForRealCleanup(t, clock, done)
 	if outcome.err != nil {
 		t.Fatalf("successful leader completion got %T %v", outcome.err, outcome.err)
 	}
-	if err := syscall.Kill(descendantPID, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("pipe-holding descendant %d remains: %v", descendantPID, err)
-	}
+	requireProcessNonExecutable(t, descendantPID)
 }
 
 func waitForCleanupTimer(t *testing.T, clock *fakeProcessClock, done <-chan asyncProcessResult) *fakeProcessTimer {
@@ -310,8 +333,14 @@ func TestExecRunnerTerminatesProcessGroupDescendant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse descendant pid: %v", err)
 	}
-	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("descendant %d remains: %v", pid, err)
+	requireProcessNonExecutable(t, pid)
+}
+
+func requireProcessNonExecutable(t *testing.T, pid int) {
+	t.Helper()
+	alive, err := processTestPIDExecutable(pid)
+	if err != nil || alive {
+		t.Fatalf("descendant %d remains executable: alive=%v error=%v", pid, alive, err)
 	}
 }
 

@@ -444,6 +444,28 @@ func requireFakeTimerDuration(
 	}
 }
 
+func requireFakeTimerDurationUntil(
+	t *testing.T,
+	clock *fakeProcessClock,
+	duration time.Duration,
+	description string,
+	onOther func(*fakeProcessTimer),
+) *fakeProcessTimer {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case timer := <-clock.timers:
+			if timer.duration == duration {
+				return timer
+			}
+			onOther(timer)
+		case <-deadline:
+			t.Fatalf("runner did not create timer for %s", description)
+		}
+	}
+}
+
 func requirePollAndGraceTimers(t *testing.T, clock *fakeProcessClock) *fakeProcessTimer {
 	t.Helper()
 	first := requireFakeTimer(t, clock, "TERM grace or group recheck")

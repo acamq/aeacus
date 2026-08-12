@@ -3,25 +3,15 @@
 package main
 
 import (
-	"encoding/binary"
 	"errors"
 	"sync"
 	"sync/atomic"
 	"syscall"
-	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
-var hostByteOrder = func() binary.ByteOrder {
-	var value uint16 = 1
-	if *(*byte)(unsafe.Pointer(&value)) == 1 {
-		return binary.LittleEndian
-	}
-	return binary.BigEndian
-}()
-
-const pointerSize = 8
+const freeBSDCancelEventID = 1
 
 type osProcessGroupFactory struct{}
 
@@ -30,8 +20,11 @@ func (osProcessGroupFactory) Open(pid int) (processGroup, error) {
 	if err != nil {
 		return nil, err
 	}
-	change := unix.Kevent_t{Ident: uint64(pid), Filter: unix.EVFILT_PROC, Flags: unix.EV_ADD | unix.EV_ONESHOT, Fflags: unix.NOTE_EXIT}
-	if _, err := unix.Kevent(kqueue, []unix.Kevent_t{change}, nil, nil); err != nil {
+	changes := []unix.Kevent_t{
+		{Ident: uint64(pid), Filter: unix.EVFILT_PROC, Flags: unix.EV_ADD | unix.EV_ONESHOT, Fflags: unix.NOTE_EXIT},
+		{Ident: freeBSDCancelEventID, Filter: unix.EVFILT_USER, Flags: unix.EV_ADD},
+	}
+	if _, err := unix.Kevent(kqueue, changes, nil, nil); err != nil {
 		unix.Close(kqueue)
 		return nil, err
 	}
@@ -54,21 +47,35 @@ type freeBSDProcessGroup struct {
 func (g *freeBSDProcessGroup) LeaderExited() <-chan error { return g.exited }
 func (g *freeBSDProcessGroup) Close() {
 	g.close.Do(func() {
-		unix.Close(g.kqueue)
-		if g.done != nil {
-			<-g.done
+		trigger := unix.Kevent_t{
+			Ident: freeBSDCancelEventID, Filter: unix.EVFILT_USER, Fflags: unix.NOTE_TRIGGER,
 		}
+		for {
+			_, err := unix.Kevent(g.kqueue, []unix.Kevent_t{trigger}, nil, nil)
+			if !errors.Is(err, syscall.EINTR) {
+				break
+			}
+		}
+		<-g.done
+		unix.Close(g.kqueue)
 	})
 }
 
 func (g *freeBSDProcessGroup) observeLeader() {
 	defer close(g.done)
-	events := make([]unix.Kevent_t, 1)
+	events := make([]unix.Kevent_t, 2)
 	count, err := unix.Kevent(g.kqueue, nil, events, nil)
-	if err == nil && count == 1 {
-		g.leaderExited.Store(true)
+	if err != nil {
+		g.exited <- err
+		return
 	}
-	g.exited <- err
+	for _, event := range events[:count] {
+		if event.Filter == unix.EVFILT_PROC && event.Ident == uint64(g.pid) {
+			g.leaderExited.Store(true)
+			g.exited <- nil
+			return
+		}
+	}
 }
 
 func (g *freeBSDProcessGroup) Signal(signal syscall.Signal) error {
@@ -84,19 +91,5 @@ func (g *freeBSDProcessGroup) Alive() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for len(data) >= 8 {
-		size := int(hostByteOrder.Uint32(data[:4]))
-		if size < 8 || size > len(data) {
-			return false, syscall.EINVAL
-		}
-		pidOffset := 8 + 8*pointerSize
-		if size >= pidOffset+4 {
-			pid := int(int32(hostByteOrder.Uint32(data[pidOffset : pidOffset+4])))
-			if pid != g.pid || !g.leaderExited.Load() {
-				return true, nil
-			}
-		}
-		data = data[size:]
-	}
-	return false, nil
+	return freeBSDExecutableGroupAlive(data, g.pid, g.leaderExited.Load())
 }

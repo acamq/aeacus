@@ -93,6 +93,8 @@ func TestProcessHelper(t *testing.T) {
 		}
 	case "leader-exits-on-term", "leader-exits-descendant-holds-pipes":
 		ch := make(chan os.Signal, 1)
+		descendantReady := make(chan os.Signal, 1)
+		signal.Notify(descendantReady, syscall.SIGUSR1)
 		if args[0] == "leader-exits-on-term" {
 			signal.Notify(ch, syscall.SIGTERM)
 		}
@@ -108,6 +110,7 @@ func TestProcessHelper(t *testing.T) {
 		if err := notifyProcessHelper(args[1], strconv.Itoa(child.Process.Pid)); err != nil {
 			os.Exit(2)
 		}
+		<-descendantReady
 		if args[0] == "leader-exits-on-term" {
 			<-ch
 		}
@@ -123,9 +126,15 @@ func TestProcessHelper(t *testing.T) {
 		if err := notifyProcessHelper(args[1], "descendant-ready"); err != nil {
 			os.Exit(2)
 		}
+		if err := syscall.Kill(os.Getppid(), syscall.SIGUSR1); err != nil {
+			os.Exit(2)
+		}
 		select {}
 	case "orphan-default-term":
 		if err := notifyProcessHelper(args[1], "descendant-ready"); err != nil {
+			os.Exit(2)
+		}
+		if err := syscall.Kill(os.Getppid(), syscall.SIGUSR1); err != nil {
 			os.Exit(2)
 		}
 		select {}
