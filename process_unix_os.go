@@ -4,9 +4,9 @@ package main
 
 import (
 	"errors"
-	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -40,38 +40,23 @@ func (osProcessStarter) Start(invocation processInvocation) (runningProcess, err
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	process := &osRunningProcess{
-		pid:     cmd.Process.Pid,
-		process: cmd.Process,
-		wait:    make(chan error, 1),
-	}
-	go func() {
-		process.wait <- cmd.Wait()
-	}()
+	process := &osRunningProcess{pid: cmd.Process.Pid, cmd: cmd, wait: make(chan error, 1)}
 	return process, nil
 }
 
 type osRunningProcess struct {
-	pid     int
-	process *os.Process
-	wait    chan error
+	pid      int
+	cmd      *exec.Cmd
+	wait     chan error
+	waitOnce sync.Once
 }
 
-func (p *osRunningProcess) Wait() <-chan error { return p.wait }
-
-func (p *osRunningProcess) SignalGroup(signal syscall.Signal) error {
-	return syscall.Kill(-p.pid, signal)
+func (p *osRunningProcess) PID() int { return p.pid }
+func (p *osRunningProcess) Wait() <-chan error {
+	p.waitOnce.Do(func() {
+		go func() { p.wait <- p.cmd.Wait() }()
+	})
+	return p.wait
 }
 
-func (p *osRunningProcess) KillDirect() error { return p.process.Kill() }
-
-func (p *osRunningProcess) GroupAlive() (bool, error) {
-	err := syscall.Kill(-p.pid, 0)
-	if err == nil || errors.Is(err, syscall.EPERM) {
-		return true, nil
-	}
-	if errors.Is(err, syscall.ESRCH) {
-		return false, nil
-	}
-	return false, err
-}
+func (p *osRunningProcess) KillDirect() error { return p.cmd.Process.Kill() }
