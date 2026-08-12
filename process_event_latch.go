@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
@@ -140,4 +141,18 @@ func (c *processEventCoordinator) eventLocked() processEvent {
 		event.primary = &processOverflowError{path: c.path, stream: processStderr, limit: c.limits.stderrLimit}
 	}
 	return event
+}
+
+func (p *activeProcess) classifyJoinedOutput(primary error) error {
+	var timeout *processTimeoutError
+	if errors.As(primary, &timeout) {
+		return primary
+	}
+	if p.stdout.Exceeded() {
+		return &processOverflowError{path: p.path, stream: processStdout, limit: p.limits.stdoutLimit}
+	}
+	if p.stderr.Exceeded() {
+		return &processOverflowError{path: p.path, stream: processStderr, limit: p.limits.stderrLimit}
+	}
+	return primary
 }

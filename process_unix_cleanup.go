@@ -128,6 +128,7 @@ func (p *activeProcess) reapExpiredFrom(wait <-chan error, request processReapRe
 
 func (p *activeProcess) finishReap(waitError error, request processReapRequest) error {
 	p.waitError = waitError
+	request.primary = p.classifyJoinedOutput(request.primary)
 	if request.cleanupError != nil || request.primary != nil && !validCleanupWait(waitError) {
 		return &processWaitError{
 			path: p.path, kind: waitFailed,
@@ -152,14 +153,19 @@ func (r execRunner) reapAndClassify(process *activeProcess, observationError err
 	case waitError := <-wait:
 		stopProcessTimer(request.bound)
 		process.waitError = waitError
-		if request.cleanupError != nil {
+		primary := process.classifyJoinedOutput(nil)
+		if request.cleanupError != nil || primary != nil && waitError != nil {
 			return &processWaitError{
 				path: process.path, kind: waitFailed,
 				err: errors.Join(
 					request.cleanupError,
 					labelProcessError("wait for direct child", waitError),
 				),
+				primary: primary,
 			}
+		}
+		if primary != nil {
+			return primary
 		}
 		return classifyProcessWait(process.path, waitError)
 	case <-request.bound.Chan():
