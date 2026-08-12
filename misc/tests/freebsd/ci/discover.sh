@@ -17,7 +17,7 @@ sha256 -q misc/tests/freebsd/kinfo_probe.c > "$out/probe-source.sha256"
 while IFS= read -r path; do
     [ -n "$path" ] || continue
     if [ -e "$path" ] || [ -L "$path" ]; then
-        stat -f '%N\t%HT\t%u\t%g\t%Mp%Lp\t%l\t%z' "$path"
+        stat -f '%N	%HT	%u	%g	%Mp%Lp	%l	%z' "$path"
         case "$path" in
             /etc/master.passwd) policy=stat-only ;;
             *) policy=sha256 ;;

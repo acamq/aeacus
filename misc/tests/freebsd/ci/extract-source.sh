@@ -8,16 +8,13 @@ fi
 
 archive=$1
 destination=$2
-tar -tf "$archive" | awk '
-BEGIN { failed = 0 }
-/^\// { failed = 1 }
-{
-    count = split($0, parts, "/")
-    for (part_number = 1; part_number <= count; part_number++) {
-        if (parts[part_number] == ".." || parts[part_number] == "") failed = 1
-    }
-}
-END { exit failed }
-'
+listing="${TMPDIR:-/tmp}/aeacus-archive-members-$$"
+trap 'rm -f "$listing"' EXIT INT TERM
+tar -tf "$archive" > "$listing"
+while IFS= read -r member; do
+    case "$member" in
+        ''|/*|..|../*|*/..|*/../*|*//* ) exit 1 ;;
+    esac
+done < "$listing"
 mkdir "$destination"
 tar -xf "$archive" -C "$destination"

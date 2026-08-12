@@ -106,7 +106,7 @@ jobs:
           ARCH: '${{ matrix.arch }}'
           SOURCE_DATE_EPOCH: '${{ env.SOURCE_DATE_EPOCH }}'
         run: |
-          misc/tests/freebsd/ci/native-smoke.sh fixtures
+          sh -x misc/tests/freebsd/ci/native-smoke.sh fixtures
           misc/tests/freebsd/ci/build-fixtures.sh
       - name: Synchronize fixture bytes from VM
         run: cpa.sh --sync-files vm-to-runner
@@ -140,8 +140,11 @@ jobs:
           export SOURCE_DATE_EPOCH=$epoch
           mkdir input
           for row in rows/*; do
-            release=$(basename "$row" | cut -d- -f3)
-            arch=$(basename "$row" | cut -d- -f4)
+            identity=${row#rows/fixture-row-}
+            suffix=-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT
+            identity=${identity%"$suffix"}
+            release=${identity%%-*}
+            arch=${identity#*-}
             mkdir -p "input/$release/$arch"
             cp -R "$row"/. "input/$release/$arch/"
           done

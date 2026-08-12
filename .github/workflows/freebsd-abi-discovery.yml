@@ -65,7 +65,7 @@ jobs:
           RELEASE: '${{ matrix.release }}'
           ARCH: '${{ matrix.arch }}'
         run: |
-          misc/tests/freebsd/ci/native-smoke.sh discovery
+          sh -x misc/tests/freebsd/ci/native-smoke.sh discovery
           misc/tests/freebsd/ci/discover.sh
       - name: Synchronize discovery bytes from VM
         run: cpa.sh --sync-files vm-to-runner
@@ -95,8 +95,11 @@ jobs:
         run: |
           mkdir input
           for row in rows/*; do
-            release=$(basename "$row" | cut -d- -f3)
-            arch=$(basename "$row" | cut -d- -f4)
+            identity=${row#rows/abi-row-}
+            suffix=-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT
+            identity=${identity%"$suffix"}
+            release=${identity%%-*}
+            arch=${identity#*-}
             mkdir -p "input/$release/$arch"
             cp -R "$row"/. "input/$release/$arch/"
           done

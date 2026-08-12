@@ -88,7 +88,7 @@ def test_discovery_driver_sensitive_and_unreadable_boundaries() -> None:
         commands = {
             "cc": "#!/bin/sh\nout=\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && { shift; out=$1; }; shift; done\ncp \"$PROBE_FIXTURE\" \"$out\"\nchmod +x \"$out\"\n",
             "freebsd-version": "#!/bin/sh\nprintf '15.1-RELEASE\\n'\n",
-            "stat": "#!/bin/sh\nfor last do :; done\nprintf '%s\\tRegular File\\t0\\t0\\t0600\\t1\\t1\\n' \"$last\"\n",
+            "stat": "#!/bin/sh\nfor last do :; done\nprintf '%s\tRegular File\t0\t0\t0600\t1\t1\n' \"$last\"\n",
             "sha256": "#!/bin/sh\ncase \"$*\" in *master.passwd*) exit 97;; *'/etc/passwd'*) printf '%s\\n' ordinary >> \"$SHA_LOG\"; exit 98;; *) printf '%064d\\n' 0;; esac\n",
         }
         for name, body in commands.items():
@@ -160,6 +160,16 @@ def test_host_python_runs_as_modules() -> None:
                 assert "python3 -m misc.tests.freebsd." in line, line
 
 
+def test_workflow_row_identity_preserves_hyphenated_architecture() -> None:
+    for workflow_name, prefix in (("freebsd-abi-discovery.yml", "abi-row-"), ("freebsd-fixture-build.yml", "fixture-row-")):
+        workflow = (ROOT / ".github/workflows" / workflow_name).read_text(encoding="utf-8")
+        assert f"identity=${{row#rows/{prefix}}}" in workflow
+        assert 'suffix=-$GITHUB_SHA-$GITHUB_RUN_ATTEMPT' in workflow
+        assert 'identity=${identity%"$suffix"}' in workflow
+        assert "arch=${identity#*-}" in workflow
+        assert 'cut -d- -f4' not in workflow
+
+
 def test_awk_variables_avoid_builtin_names() -> None:
     builtins = ("index", "length", "split", "substr", "match", "sub", "gsub", "sprintf")
     for script in sorted((FREEBSD / "ci").glob("*.sh")):
@@ -178,6 +188,7 @@ def main() -> int:
     test_archive_filter_executes()
     test_guest_shell_uses_base_tools()
     test_host_python_runs_as_modules()
+    test_workflow_row_identity_preserves_hyphenated_architecture()
     test_awk_variables_avoid_builtin_names()
     print("Task 10 repair boundaries: PASS")
     return 0
