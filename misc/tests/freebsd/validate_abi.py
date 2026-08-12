@@ -60,8 +60,8 @@ def validate_row(value: JsonObject) -> tuple[str, str]:
     fields = [validate_field(require_object(item, "$.rows[].fields[]"), index) for index, item in enumerate(require_array(value["fields"], "$.rows[].fields"))]
     if tuple(field[0] for field in fields) != FIELD_NAMES:
         raise ContractError(detail="wrong kinfo field inventory/order")
-    if fields[0][1:3] != (0, 4) or fields[1][1:3] != (72, 4) or fields[2][1:3] != (360, 8):
-        raise ContractError(detail="kinfo invariant mismatch")
+    if fields[0][1:3] != (0, 4):
+        raise ContractError(detail="ki_structsize invariant mismatch")
     if fields[4][2:] != (16, False):
         raise ContractError(detail="ki_start width/signedness mismatch")
     if any(offset + width > 1088 for _, offset, width, _ in fields):

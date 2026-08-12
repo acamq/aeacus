@@ -4,8 +4,10 @@ set -eu
 : "${RELEASE:?}" "${ARCH:?}"
 : "${SOURCE_DATE_EPOCH:?}" "${GITHUB_SHA:?}"
 
-out="out/fixtures/$RELEASE/$ARCH"
-work="/tmp/aeacus-fixtures-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$RELEASE-$ARCH"
+artifact_arch=$ARCH
+unset ARCH
+out="out/fixtures/$RELEASE/$artifact_arch"
+work="/tmp/aeacus-fixtures-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$RELEASE-$artifact_arch"
 trap 'rm -rf "$work"' EXIT INT TERM
 mkdir -p "$out/sources" "$work"
 

@@ -34,6 +34,7 @@ def test_static_boundaries() -> None:
     assert 'if [ "$policy" = stat-only ]' in discovery
     assert "/usr/ports" not in fixtures
     assert "PACKAGES=" in fixtures and "PORTSDIR=" in fixtures and "DISTDIR=" in fixtures
+    assert "artifact_arch=$ARCH" in fixtures and "unset ARCH" in fixtures
 
 
 def test_discovery_never_reads_sensitive_content() -> None:
@@ -96,7 +97,7 @@ def test_discovery_driver_sensitive_and_unreadable_boundaries() -> None:
             path.write_text(body, encoding="ascii")
             path.chmod(0o755)
         probe = root / "probe"
-        probe.write_text("#!/bin/sh\nprintf 'struct_size\\t1088\\np_traced\\t2048\\nki_structsize\\t0\\t4\\t0\\nki_pid\\t72\\t4\\t1\\nki_flag\\t360\\t8\\t0\\nki_tracer\\t1120\\t4\\t1\\nki_start\\t312\\t16\\t0\\n'\n", encoding="ascii")
+        probe.write_text("#!/bin/sh\nprintf 'struct_size\\t1088\\np_traced\\t2048\\nki_structsize\\t0\\t4\\t1\\nki_pid\\t72\\t4\\t1\\nki_flag\\t368\\t8\\t1\\nki_tracer\\t576\\t4\\t1\\nki_start\\t336\\t16\\t0\\n'\n", encoding="ascii")
         probe.chmod(0o755)
         env = os.environ | {"PATH": f"{fake_bin}:{os.environ['PATH']}", "SHA_LOG": str(log), "PROBE_FIXTURE": str(probe), "RELEASE": "15.1", "ARCH": "x86-64", "GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": "1", "GITHUB_RUN_ATTEMPT": "1"}
         result = subprocess.run(["sh", "misc/tests/freebsd/ci/discover.sh"], cwd=workspace, env=env, check=False, capture_output=True, text=True)

@@ -57,7 +57,7 @@ def valid_abi() -> dict[str, object]:
     fields = [
         {"name": "ki_structsize", "offset": 0, "width": 4, "signed": False},
         {"name": "ki_pid", "offset": 72, "width": 4, "signed": True},
-        {"name": "ki_flag", "offset": 360, "width": 8, "signed": False},
+        {"name": "ki_flag", "offset": 368, "width": 8, "signed": True},
         {"name": "ki_tracer", "offset": 0, "width": 4, "signed": True},
         {"name": "ki_start", "offset": 0, "width": 16, "signed": False},
     ]
