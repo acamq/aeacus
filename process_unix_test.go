@@ -5,7 +5,6 @@ package main
 import (
 	"errors"
 	"io"
-	"os"
 	"syscall"
 	"testing"
 	"time"
@@ -35,21 +34,48 @@ func (c *fakeProcessClock) NewTimer(duration time.Duration) processTimer {
 }
 
 type fakeRunningProcess struct {
-	wait    chan error
-	signals chan syscall.Signal
+	wait            chan error
+	directKillError error
 }
 
 func newFakeRunningProcess() *fakeRunningProcess {
-	return &fakeRunningProcess{wait: make(chan error, 1), signals: make(chan syscall.Signal, 2)}
+	return &fakeRunningProcess{
+		wait: make(chan error, 1),
+	}
 }
 
+func (p *fakeRunningProcess) PID() int           { return 42 }
 func (p *fakeRunningProcess) Wait() <-chan error { return p.wait }
-func (p *fakeRunningProcess) SignalGroup(signal syscall.Signal) error {
-	p.signals <- signal
-	return nil
+func (p *fakeRunningProcess) KillDirect() error  { return p.directKillError }
+
+type fakeGroupSignalTarget struct {
+	signals chan syscall.Signal
+	errors  []error
 }
-func (p *fakeRunningProcess) KillDirect() error         { return nil }
-func (p *fakeRunningProcess) GroupAlive() (bool, error) { return false, nil }
+
+func (g *fakeGroupSignalTarget) Signal(signal syscall.Signal) error {
+	g.signals <- signal
+	if len(g.errors) == 0 {
+		return nil
+	}
+	err := g.errors[0]
+	g.errors = g.errors[1:]
+	return err
+}
+
+func (g *fakeGroupSignalTarget) Close() {}
+
+type fakeGroupSignalFactory struct {
+	target *fakeGroupSignalTarget
+	err    error
+}
+
+func (f fakeGroupSignalFactory) Open(int) (groupSignalTarget, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.target, nil
+}
 
 type fakeProcessStarter struct {
 	process    *fakeRunningProcess
@@ -70,43 +96,44 @@ type asyncProcessResult struct {
 	err    error
 }
 
-func runFakeProcess(runner execRunner, path string, profile processProfile) <-chan asyncProcessResult {
+func runFakeProcess(runner execRunner, path string, limits processLimits) <-chan asyncProcessResult {
 	done := make(chan asyncProcessResult, 1)
 	go func() {
-		result, err := runner.Run(path, []string{"literal argument"}, profile)
+		result, err := runner.run(path, []string{"literal argument"}, limits)
 		done <- asyncProcessResult{result: result, err: err}
 	}()
 	return done
 }
 
-func newFakeExecRunner() (execRunner, *fakeProcessClock, *fakeProcessStarter) {
+func newFakeExecRunner() (execRunner, *fakeProcessClock, *fakeProcessStarter, *fakeGroupSignalTarget) {
 	clock := newFakeProcessClock()
 	starter := &fakeProcessStarter{
 		process: newFakeRunningProcess(),
 		started: make(chan processInvocation, 1),
 	}
-	return execRunner{clock: clock, starter: starter}, clock, starter
+	target := &fakeGroupSignalTarget{signals: make(chan syscall.Signal, 2)}
+	return execRunner{clock: clock, starter: starter, groupSignals: fakeGroupSignalFactory{target: target}}, clock, starter, target
 }
 
 func TestProcessProfilesAreCompileTimeBounded(t *testing.T) {
 	tests := []struct {
-		profile processProfile
-		want    processLimits
+		got  processLimits
+		want processLimits
 	}{
-		{builtInQuery, processLimits{10 * time.Second, 1 << 20, 1 << 20, 2 * time.Second, 2 * time.Second}},
-		{pkgInventory, processLimits{30 * time.Second, 16 << 20, 1 << 20, 2 * time.Second, 2 * time.Second}},
-		{trustedCommand, processLimits{30 * time.Second, 1 << 20, 1 << 20, 2 * time.Second, 2 * time.Second}},
+		{builtInQueryLimits(), processLimits{10 * time.Second, 1 << 20, 1 << 20, 2 * time.Second, 2 * time.Second}},
+		{pkgInventoryLimits(), processLimits{30 * time.Second, 16 << 20, 1 << 20, 2 * time.Second, 2 * time.Second}},
+		{trustedCommandLimits(), processLimits{30 * time.Second, 1 << 20, 1 << 20, 2 * time.Second, 2 * time.Second}},
 	}
 	for _, tt := range tests {
-		if got := tt.profile.Limits(); got != tt.want {
-			t.Fatalf("profile %d got %+v, want %+v", tt.profile, got, tt.want)
+		if tt.got != tt.want {
+			t.Fatalf("profile got %+v, want %+v", tt.got, tt.want)
 		}
 	}
 }
 
 func TestExecRunnerTimeoutTerminatesWithinExactFakeClockBounds(t *testing.T) {
-	runner, clock, starter := newFakeExecRunner()
-	done := runFakeProcess(runner, "/bin/true", builtInQuery)
+	runner, clock, starter, group := newFakeExecRunner()
+	done := runFakeProcess(runner, "/bin/true", builtInQueryLimits())
 	invocation := <-starter.started
 	if invocation.path != "/bin/true" || len(invocation.args) != 1 || invocation.args[0] != "literal argument" {
 		t.Fatalf("unexpected invocation: %#v", invocation)
@@ -116,7 +143,7 @@ func TestExecRunnerTimeoutTerminatesWithinExactFakeClockBounds(t *testing.T) {
 		t.Fatalf("timeout got %v", timeout.duration)
 	}
 	timeout.fire()
-	if signal := <-starter.process.signals; signal != syscall.SIGTERM {
+	if signal := <-group.signals; signal != syscall.SIGTERM {
 		t.Fatalf("first signal got %v", signal)
 	}
 	grace := <-clock.timers
@@ -132,18 +159,18 @@ func TestExecRunnerTimeoutTerminatesWithinExactFakeClockBounds(t *testing.T) {
 }
 
 func TestExecRunnerEscalatesAndBoundsWaitAtExactFakeClockBoundaries(t *testing.T) {
-	runner, clock, starter := newFakeExecRunner()
-	done := runFakeProcess(runner, "/bin/true", trustedCommand)
+	runner, clock, starter, group := newFakeExecRunner()
+	done := runFakeProcess(runner, "/bin/true", trustedCommandLimits())
 	<-starter.started
 	timeout := <-clock.timers
 	if timeout.duration != 30*time.Second {
 		t.Fatalf("timeout got %v", timeout.duration)
 	}
 	timeout.fire()
-	<-starter.process.signals
+	<-group.signals
 	grace := <-clock.timers
 	grace.fire()
-	if signal := <-starter.process.signals; signal != syscall.SIGKILL {
+	if signal := <-group.signals; signal != syscall.SIGKILL {
 		t.Fatalf("second signal got %v", signal)
 	}
 	waitBound := <-clock.timers
@@ -173,8 +200,8 @@ func TestExecRunnerAllowsExactLimitAndRejectsNextByte(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runner, clock, starter := newFakeExecRunner()
-			done := runFakeProcess(runner, "/bin/true", builtInQuery)
+			runner, clock, starter, group := newFakeExecRunner()
+			done := runFakeProcess(runner, "/bin/true", builtInQueryLimits())
 			invocation := <-starter.started
 			<-clock.timers
 			if _, err := tt.writer(invocation).Write(make([]byte, 1<<20)); err != nil {
@@ -183,7 +210,7 @@ func TestExecRunnerAllowsExactLimitAndRejectsNextByte(t *testing.T) {
 			if _, err := tt.writer(invocation).Write([]byte{'x'}); err != nil {
 				t.Fatalf("write overflow marker: %v", err)
 			}
-			if signal := <-starter.process.signals; signal != syscall.SIGTERM {
+			if signal := <-group.signals; signal != syscall.SIGTERM {
 				t.Fatalf("overflow signal got %v", signal)
 			}
 			<-clock.timers
@@ -203,23 +230,35 @@ func TestExecRunnerAllowsExactLimitAndRejectsNextByte(t *testing.T) {
 	}
 }
 
-func TestExecRunnerClassifiesStartAndWaitFailures(t *testing.T) {
-	starter := &fakeProcessStarter{startError: os.ErrPermission, started: make(chan processInvocation, 1)}
-	runner := execRunner{clock: newFakeProcessClock(), starter: starter}
-	_, err := runner.Run("/denied", nil, builtInQuery)
-	var startError *processStartError
-	if !errors.As(err, &startError) {
-		t.Fatalf("got %T, want start error", err)
-	}
-
-	runner2, clock, starter := newFakeExecRunner()
-	done := runFakeProcess(runner2, "/bin/true", builtInQuery)
+func TestExecRunnerWaitsForLeaderReapAfterTERM(t *testing.T) {
+	runner, clock, starter, group := newFakeExecRunner()
+	done := runFakeProcess(runner, "/bin/true", builtInQueryLimits())
 	<-starter.started
+	(<-clock.timers).fire()
+	if signal := <-group.signals; signal != syscall.SIGTERM {
+		t.Fatalf("first signal got %v", signal)
+	}
 	<-clock.timers
-	starter.process.wait <- errors.New("wait failed")
+	starter.process.wait <- nil
 	outcome := <-done
-	var waitError *processWaitError
-	if !errors.As(outcome.err, &waitError) || waitError.kind != waitFailed {
-		t.Fatalf("got %T %v, want wait error", outcome.err, outcome.err)
+	var timeoutError *processTimeoutError
+	if !errors.As(outcome.err, &timeoutError) || timeoutError.cleanup != cleanupTerminated {
+		t.Fatalf("got %T %v, want terminated timeout", outcome.err, outcome.err)
+	}
+}
+
+func TestExecRunnerUsesPreopenedGroupTargetAfterLeaderWait(t *testing.T) {
+	runner, clock, starter, group := newFakeExecRunner()
+	done := runFakeProcess(runner, "/bin/true", builtInQueryLimits())
+	<-starter.started
+	(<-clock.timers).fire()
+	<-group.signals
+	<-clock.timers
+	starter.process.wait <- nil
+	<-done
+	select {
+	case signal := <-group.signals:
+		t.Fatalf("unexpected extra group signal %v", signal)
+	default:
 	}
 }

@@ -21,12 +21,12 @@ func TestExecRunnerRealProcessClassifiesExitAndSignal(t *testing.T) {
 	}
 	runner := newExecRunner()
 
-	_, err = runner.Run(executable, helperArgs("exit", "7"), builtInQuery)
+	_, err = runner.RunBuiltIn(executable, helperArgs("exit", "7"))
 	var exitError *processExitError
 	if !errors.As(err, &exitError) || exitError.code != 7 {
 		t.Fatalf("got %T %v, want exit 7", err, err)
 	}
-	_, err = runner.Run(executable, helperArgs("signal"), builtInQuery)
+	_, err = runner.RunBuiltIn(executable, helperArgs("signal"))
 	var signalError *processSignalError
 	if !errors.As(err, &signalError) || signalError.signal != syscall.SIGTERM {
 		t.Fatalf("got %T %v, want SIGTERM", err, err)
@@ -42,7 +42,7 @@ func TestExecRunnerRealProcessEnforcesExactOutputLimits(t *testing.T) {
 	for _, stream := range []string{"stdout", "stderr"} {
 		t.Run(stream, func(t *testing.T) {
 			runner := newExecRunner()
-			result, runErr := runner.Run(executable, helperArgs(stream, strconv.Itoa(1<<20)), builtInQuery)
+			result, runErr := runner.RunBuiltIn(executable, helperArgs(stream, strconv.Itoa(1<<20)))
 			if runErr != nil {
 				t.Fatalf("exact limit: %v", runErr)
 			}
@@ -53,7 +53,7 @@ func TestExecRunnerRealProcessEnforcesExactOutputLimits(t *testing.T) {
 				t.Fatalf("stderr length got %d", len(result.stderr))
 			}
 
-			overflowResult, runErr := runner.Run(executable, helperArgs(stream, strconv.Itoa((1<<20)+1)), builtInQuery)
+			overflowResult, runErr := runner.RunBuiltIn(executable, helperArgs(stream, strconv.Itoa((1<<20)+1)))
 			var overflow *processOverflowError
 			if !errors.As(runErr, &overflow) {
 				t.Fatalf("limit+1 got %T %v", runErr, runErr)
@@ -85,11 +85,11 @@ func TestExecRunnerRealProcessHandlesTERMAndKILLEscalation(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.mode, func(t *testing.T) {
 			clock := newFakeProcessClock()
-			runner := execRunner{clock: clock, starter: osProcessStarter{}}
+			runner := execRunner{clock: clock, starter: osProcessStarter{}, groupSignals: osGroupSignalFactory{}}
 			socket, socketPath := newProcessReadySocket(t)
 			done := make(chan asyncProcessResult, 1)
 			go func() {
-				result, runErr := runner.Run(executable, helperArgs(tt.mode, socketPath), builtInQuery)
+				result, runErr := runner.RunBuiltIn(executable, helperArgs(tt.mode, socketPath))
 				done <- asyncProcessResult{result: result, err: runErr}
 			}()
 			ready := make([]byte, 8)
@@ -119,11 +119,11 @@ func TestExecRunnerTerminatesProcessGroupDescendant(t *testing.T) {
 		t.Fatal(err)
 	}
 	clock := newFakeProcessClock()
-	runner := execRunner{clock: clock, starter: osProcessStarter{}}
+	runner := execRunner{clock: clock, starter: osProcessStarter{}, groupSignals: osGroupSignalFactory{}}
 	socket, socketPath := newProcessReadySocket(t)
 	done := make(chan asyncProcessResult, 1)
 	go func() {
-		result, runErr := runner.Run(executable, helperArgs("descendant", socketPath), builtInQuery)
+		result, runErr := runner.RunBuiltIn(executable, helperArgs("descendant", socketPath))
 		done <- asyncProcessResult{result: result, err: runErr}
 	}()
 	pidBuffer := make([]byte, 32)
