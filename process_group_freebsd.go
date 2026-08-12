@@ -102,7 +102,7 @@ func (g *freeBSDProcessGroup) observeLeader() {
 func freeBSDLeaderObservation(events []unix.Kevent_t, pid int) (bool, error) {
 	var observationError error
 	for _, event := range events {
-		if event.Filter == unix.EVFILT_PROC && event.Ident == uint64(pid) {
+		if event.Filter == unix.EVFILT_PROC && event.Ident == uint64(pid) && event.Fflags&unix.NOTE_EXIT != 0 {
 			return true, nil
 		}
 		if event.Flags&unix.EV_ERROR != 0 && event.Data != 0 {

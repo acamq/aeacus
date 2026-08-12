@@ -166,6 +166,16 @@ func TestFreeBSDLeaderObservationReportsKernelError(t *testing.T) {
 	}
 }
 
+func TestFreeBSDLeaderObservationDoesNotPublishProcErrorAsExit(t *testing.T) {
+	event := unix.Kevent_t{
+		Ident: 41, Filter: unix.EVFILT_PROC, Flags: unix.EV_ERROR, Data: int64(unix.EBADF),
+	}
+	exited, err := freeBSDLeaderObservation([]unix.Kevent_t{event}, 41)
+	if exited || !errors.Is(err, unix.EBADF) {
+		t.Fatalf("process error got exited=%v error=%v", exited, err)
+	}
+}
+
 func TestFreeBSDProcessRecordsClassifyExecutableGroupMembers(t *testing.T) {
 	tests := []struct {
 		name         string
