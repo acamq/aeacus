@@ -93,8 +93,8 @@ func TestProcessHelper(t *testing.T) {
 		}
 	case "leader-exits-on-term", "leader-exits-descendant-holds-pipes":
 		ch := make(chan os.Signal, 1)
-		descendantReady := make(chan os.Signal, 1)
-		signal.Notify(descendantReady, syscall.SIGUSR1)
+		descendantStarted := make(chan os.Signal, 1)
+		signal.Notify(descendantStarted, syscall.SIGUSR1)
 		if args[0] == "leader-exits-on-term" {
 			signal.Notify(ch, syscall.SIGTERM)
 		}
@@ -107,26 +107,23 @@ func TestProcessHelper(t *testing.T) {
 		if err := child.Start(); err != nil {
 			os.Exit(2)
 		}
-		if err := notifyProcessHelper(args[1], strconv.Itoa(child.Process.Pid)); err != nil {
+		<-descendantStarted
+		if err := notifyProcessHelper(args[1], strconv.Itoa(child.Process.Pid), "descendant-ready"); err != nil {
 			os.Exit(2)
 		}
-		<-descendantReady
 		if args[0] == "leader-exits-on-term" {
 			<-ch
 		}
 	case "orphan-ignore-term":
 		ignoreTERM := make(chan os.Signal, 1)
 		signal.Notify(ignoreTERM, syscall.SIGTERM)
+		if err := syscall.Kill(os.Getppid(), syscall.SIGUSR1); err != nil {
+			os.Exit(2)
+		}
 		if _, err := fmt.Fprint(os.Stdout, "holding stdout"); err != nil {
 			os.Exit(2)
 		}
 		if _, err := fmt.Fprint(os.Stderr, "holding stderr"); err != nil {
-			os.Exit(2)
-		}
-		if err := notifyProcessHelper(args[1], "descendant-ready"); err != nil {
-			os.Exit(2)
-		}
-		if err := syscall.Kill(os.Getppid(), syscall.SIGUSR1); err != nil {
 			os.Exit(2)
 		}
 		select {}
@@ -144,13 +141,15 @@ func TestProcessHelper(t *testing.T) {
 	os.Exit(0)
 }
 
-func notifyProcessHelper(path, message string) error {
+func notifyProcessHelper(path string, messages ...string) error {
 	connection, err := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: path, Net: "unixgram"})
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprint(connection, message); err != nil {
-		return errors.Join(err, connection.Close())
+	for _, message := range messages {
+		if _, err := fmt.Fprint(connection, message); err != nil {
+			return errors.Join(err, connection.Close())
+		}
 	}
 	return connection.Close()
 }

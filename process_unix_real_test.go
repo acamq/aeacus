@@ -324,7 +324,10 @@ func TestExecRunnerTerminatesProcessGroupDescendant(t *testing.T) {
 		t.Fatal(err)
 	}
 	(<-clock.timers).fire()
-	outcome := fireCleanupTimerUntilDone(t, clock, done)
+	grace := requireFakeTimer(t, clock, "ordinary descendant TERM grace")
+	grace.fire()
+	requireFakeTimerDurationUntil(t, clock, 2*time.Second, "ordinary descendant final wait", fireProcessGroupPoll(t))
+	outcome := waitForRealCleanup(t, clock, done)
 	var timeoutError *processTimeoutError
 	if !errors.As(outcome.err, &timeoutError) {
 		t.Fatalf("got %T %v, want timeout", outcome.err, outcome.err)
@@ -341,20 +344,6 @@ func requireProcessNonExecutable(t *testing.T, pid int) {
 	alive, err := processTestPIDExecutable(pid)
 	if err != nil || alive {
 		t.Fatalf("descendant %d remains executable: alive=%v error=%v", pid, alive, err)
-	}
-}
-
-func fireCleanupTimerUntilDone(t *testing.T, clock *fakeProcessClock, done <-chan asyncProcessResult) asyncProcessResult {
-	t.Helper()
-	for {
-		select {
-		case timer := <-clock.timers:
-			timer.fire()
-		case outcome := <-done:
-			return outcome
-		case <-time.After(3 * time.Second):
-			t.Fatal("Run did not finish process-group cleanup")
-		}
 	}
 }
 
