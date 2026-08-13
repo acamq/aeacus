@@ -44,9 +44,12 @@ def test_static_boundaries() -> None:
     assert "build-depends-list" in fixtures and "run-depends-list" in fixtures
     assert "all-depends-list" not in fixtures and "tail -r" not in fixtures
     assert 'PKG_CONFIG_SYSROOT_DIR="$sysroot"' in fixtures
+    assert 'LD_LIBRARY_PATH="$localbase/lib"' in fixtures
+    assert fixtures.count('LDFLAGS="-Wl,-rpath,$localbase/lib"') == 2
     assert 'tar -xf "$package_file" -C "$sysroot" --exclude +COMPACT_MANIFEST --exclude +MANIFEST' in fixtures
     assert 'CC="cc -I$localbase/include -L$localbase/lib"' in fixtures
     assert fixtures.index('export PATH="$localbase/bin:$localbase/sbin:$PATH"') < fixtures.index("stage_dependency()")
+    assert fixtures.index('export LD_LIBRARY_PATH="$localbase/lib"') < fixtures.index("stage_dependency()")
 
 
 def test_discovery_never_reads_sensitive_content() -> None:
